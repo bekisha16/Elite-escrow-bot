@@ -2,12 +2,16 @@ import os
 import sqlite3
 import time
 import logging
+import requests
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # ================= LOGGING =================
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 
 # ================= CONFIG =================
 TOKEN = os.getenv("BOT_TOKEN")
@@ -16,6 +20,9 @@ if not TOKEN:
     raise RuntimeError("BOT_TOKEN missing")
 
 ADMIN_IDS = [6138132255, 5635739078]
+
+# ================= REMOVE WEBHOOK (CRITICAL) =================
+requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook")
 
 # ================= DB =================
 conn = sqlite3.connect("escrow.db", check_same_thread=False)
@@ -47,7 +54,7 @@ def clean(u):
 
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Escrow Bot Running ✅")
+    await update.message.reply_text("Escrow Bot Online ✅")
 
 # ================= DEAL =================
 async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -95,7 +102,7 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     row = cursor.fetchone()
 
     if not row:
-        return await update.message.reply_text("Not found")
+        return await update.message.reply_text("Deal not found")
 
     did = row[0]
 
@@ -104,7 +111,7 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"Activated {deal_id(did)}")
 
-# ================= ACTION =================
+# ================= SELLER ACTION =================
 async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, action):
 
     if not update.message.reply_to_message:
@@ -173,106 +180,28 @@ async def buyer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "rej":
         return await q.edit_message_text("Rejected")
 
-    cursor.execute("UPDATE deals SET status=? WHERE id=?", (act.upper() + "_CONFIRMED", did))
+    cursor.execute("UPDATE deals SET status=? WHERE id=?", (act.upper()+"_CONFIRMED", did))
     conn.commit()
 
-    await q.edit_message_text("Buyer confirmed")
+    await q.edit_message_text("Confirmed")
 
-# ================= LEADERBOARD (FIXED) =================
-async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================= MAIN (SAFE RAILWAY START) =================
+def main():
 
-    if update.effective_user.id not in ADMIN_IDS:
-        return
+    app = Application.builder().token(TOKEN).build()
 
-    cursor.execute("SELECT handled_by, status FROM deals WHERE handled_by IS NOT NULL")
-    rows = cursor.fetchall()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("deal", deal))
+    app.add_handler(CommandHandler("activate", activate))
 
-    stats = {}
+    app.add_handler(CommandHandler("release", release))
+    app.add_handler(CommandHandler("refund", refund))
+    app.add_handler(CommandHandler("cancel", cancel))
 
-    for admin, status in rows:
+    app.add_handler(CallbackQueryHandler(buyer, pattern="^(acc|rej)_"))
 
-        name = admin if admin else "Unknown"
+    print("Bot running...")
+    app.run_polling(drop_pending_updates=True)
 
-        if name not in stats:
-            stats[name] = {"t": 0, "c": 0, "r": 0, "x": 0}
-
-        stats[name]["t"] += 1
-
-        if status == "COMPLETED":
-            stats[name]["c"] += 1
-        elif status == "REFUNDED":
-            stats[name]["r"] += 1
-        elif status == "CANCELLED":
-            stats[name]["x"] += 1
-
-    text = "🏆 LEADERBOARD\n\n"
-
-    i = 1
-    for admin, d in sorted(stats.items(), key=lambda x: x[1]["t"], reverse=True):
-        text += (
-            f"{i}. @{admin}\n"
-            f"Total: {d['t']}\n"
-            f"Completed: {d['c']}\n"
-            f"Refunded: {d['r']}\n"
-            f"Cancelled: {d['x']}\n\n"
-        )
-        i += 1
-
-    await update.message.reply_text(text)
-
-# ================= MAIN =================
-app = ApplicationBuilder().token(TOKEN).build()
-
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("deal", deal))
-app.add_handler(CommandHandler("activate", activate))
-
-app.add_handler(CommandHandler("release", release))
-app.add_handler(CommandHandler("refund", refund))
-app.add_handler(CommandHandler("cancel", cancel))
-
-app.add_handler(CommandHandler("leaderboard", leaderboard))
-app.add_handler(CallbackQueryHandler(buyer, pattern="^(acc|rej)_"))
-
-app.run_polling()       stats[admin]["completed"] += 1
-        elif status == "REFUNDED":
-            stats[admin]["refunded"] += 1
-        elif status == "CANCELLED":
-            stats[admin]["cancelled"] += 1
-
-    sorted_admins = sorted(stats.items(), key=lambda x: x[1]["total"], reverse=True)
-
-    text = "🏆 ADMIN LEADERBOARD\n\n"
-
-    rank = 1
-    for admin, data in sorted_admins:
-        text += (
-            f"{rank}. {admin}\n"
-            f"📦 Total: {data['total']}\n"
-            f"✅ Completed: {data['completed']}\n"
-            f"💸 Refunded: {data['refunded']}\n"
-            f"❌ Cancelled: {data['cancelled']}\n\n"
-        )
-        rank += 1
-
-    await update.message.reply_text(text)
-
-# ================= MAIN =================
-app = ApplicationBuilder().token(TOKEN).build()
-
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("deal", deal))
-app.add_handler(CommandHandler("activate", activate))
-
-app.add_handler(CommandHandler("release", release))
-app.add_handler(CommandHandler("refund", refund))
-app.add_handler(CommandHandler("cancel", cancel))
-
-app.add_handler(CommandHandler("stats", stats))
-app.add_handler(CommandHandler("history", history))
-app.add_handler(CommandHandler("leaderboard", leaderboard))
-
-app.add_handler(CallbackQueryHandler(buyer_buttons, pattern="^(acc|rej)_"))
-app.add_handler(CallbackQueryHandler(admin_buttons, pattern="^adm_"))
-
-app.run_polling()
+if __name__ == "__main__":
+    main()
