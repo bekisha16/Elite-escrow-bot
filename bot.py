@@ -116,39 +116,136 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🔄 Reject", callback_data=f"reject_{deal_id}")]
     ]
 
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=f"⚠️ CANCEL REQUEST\n🆔 ID: {deal_id}\n💵 Amount: {amount}",
+import os
+import sqlite3
+import time
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+
+# ---------------- ENV ----------------
+TOKEN = os.getenv("BOT_TOKEN")
+PROOF_CHANNEL = os.getenv("PROOF_CHANNEL", "")
+
+# MULTI ADMIN SUPPORT
+ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x]
+
+
+# ---------------- DB ----------------
+conn = sqlite3.connect("escrow.db", check_same_thread=False)
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS deals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    buyer INTEGER,
+    seller INTEGER,
+    amount TEXT,
+    status TEXT,
+    created_at REAL
+)
+""")
+conn.commit()
+
+
+# ---------------- CHECK ADMIN ----------------
+def is_admin(user_id: int):
+    return user_id in ADMIN_IDS
+
+
+# ---------------- START ----------------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 Elite Escrow Bot v4\n\n"
+        "Commands:\n"
+        "/deal <amount>"
+    )
+
+
+# ---------------- DEAL ----------------
+async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Usage: /deal <amount>")
+        return
+
+    amount = context.args[0]
+    buyer = update.effective_user.id
+
+    cursor.execute(
+        "INSERT INTO deals (buyer, seller, amount, status, created_at) VALUES (?, ?, ?, ?, ?)",
+        (buyer, None, amount, "PENDING", time.time())
+    )
+    conn.commit()
+
+    deal_id = cursor.lastrowid
+
+    keyboard = [
+        [InlineKeyboardButton("🤝 Request Release", callback_data=f"req_release_{deal_id}")],
+        [InlineKeyboardButton("❌ Request Cancel", callback_data=f"req_cancel_{deal_id}")]
+    ]
+
+    await update.message.reply_text(
+        f"💰 DEAL #{deal_id}\n💵 Amount: {amount}\n📌 Status: PENDING",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-    await update.message.reply_text("📨 Cancel request sent to admin")
 
-
-# ---------------- ADMIN BUTTON HANDLER ----------------
-async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------------- BUTTON HANDLER ----------------
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     data = query.data
+    deal_id = int(data.split("_")[-1])
 
-    # ---------------- APPROVE RELEASE ----------------
-    if data.startswith("approve_release_"):
-        deal_id = int(data.split("_")[2])
+    cursor.execute("SELECT buyer, seller, amount FROM deals WHERE id=?", (deal_id,))
+    deal = cursor.fetchone()
 
-        cursor.execute("SELECT buyer, amount FROM deals WHERE id=?", (deal_id,))
-        deal = cursor.fetchone()
+    if not deal:
+        await query.edit_message_text("❌ Deal not found")
+        return
 
-        if not deal:
-            await query.edit_message_text("❌ Deal not found")
+    buyer, seller, amount = deal
+
+
+    # ---------------- REQUEST RELEASE ----------------
+    if data.startswith("req_release_"):
+
+        keyboard = [
+            [InlineKeyboardButton("✅ Approve Release", callback_data=f"appr_release_{deal_id}")],
+            [InlineKeyboardButton("❌ Approve Cancel", callback_data=f"appr_cancel_{deal_id}")]
+        ]
+
+        await query.edit_message_text(
+            f"📦 DEAL #{deal_id}\n💵 {amount}\n⏳ RELEASE REQUESTED",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+
+    # ---------------- REQUEST CANCEL ----------------
+    elif data.startswith("req_cancel_"):
+
+        keyboard = [
+            [InlineKeyboardButton("❌ Approve Cancel", callback_data=f"appr_cancel_{deal_id}")],
+            [InlineKeyboardButton("🔄 Reject", callback_data=f"reject_{deal_id}")]
+        ]
+
+        await query.edit_message_text(
+            f"📦 DEAL #{deal_id}\n💵 {amount}\n⚠️ CANCEL REQUESTED",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+
+    # ---------------- ADMIN APPROVE RELEASE ----------------
+    elif data.startswith("appr_release_"):
+
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Admin only", show_alert=True)
             return
-
-        buyer, amount = deal
 
         cursor.execute("UPDATE deals SET status=? WHERE id=?", ("COMPLETED", deal_id))
         conn.commit()
 
-        msg = f"💸 ESCROW COMPLETED\n🆔 ID: {deal_id}\n💵 Amount: {amount}"
+        msg = f"💸 ESCROW COMPLETED\nDEAL #{deal_id}\n💵 {amount}"
 
         await query.edit_message_text(msg)
 
@@ -156,23 +253,17 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=PROOF_CHANNEL, text=msg)
 
 
-    # ---------------- APPROVE CANCEL ----------------
-    elif data.startswith("approve_cancel_"):
-        deal_id = int(data.split("_")[2])
+    # ---------------- ADMIN APPROVE CANCEL ----------------
+    elif data.startswith("appr_cancel_"):
 
-        cursor.execute("SELECT buyer, amount FROM deals WHERE id=?", (deal_id,))
-        deal = cursor.fetchone()
-
-        if not deal:
-            await query.edit_message_text("❌ Deal not found")
+        if not is_admin(query.from_user.id):
+            await query.answer("❌ Admin only", show_alert=True)
             return
-
-        buyer, amount = deal
 
         cursor.execute("UPDATE deals SET status=? WHERE id=?", ("CANCELLED", deal_id))
         conn.commit()
 
-        msg = f"⚠️ ESCROW CANCELLED\n🆔 ID: {deal_id}\n💵 Amount: {amount}"
+        msg = f"⚠️ ESCROW CANCELLED\nDEAL #{deal_id}\n💵 {amount}"
 
         await query.edit_message_text(msg)
 
@@ -182,7 +273,10 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ---------------- REJECT ----------------
     elif data.startswith("reject_"):
-        await query.edit_message_text("❌ Request rejected by admin")
+        if is_admin(query.from_user.id):
+            await query.edit_message_text("❌ Request rejected by admin")
+        else:
+            await query.answer("❌ Not allowed", show_alert=True)
 
 
 # ---------------- MAIN ----------------
@@ -190,10 +284,8 @@ app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("deal", deal))
-app.add_handler(CommandHandler("release", release))
-app.add_handler(CommandHandler("cancel", cancel))
-app.add_handler(CallbackQueryHandler(admin_buttons))
+app.add_handler(CallbackQueryHandler(buttons))
 
-print("🚀 Escrow Bot v3 Running...")
+print("🚀 Escrow Bot v4 (Multi-Admin) Running...")
 
 app.run_polling()
