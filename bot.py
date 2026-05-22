@@ -1,7 +1,6 @@
 import os
 import sqlite3
 import time
-import logging
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -11,12 +10,6 @@ from telegram.ext import (
     ContextTypes
 )
 
-# ================= LOGGING =================
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
-
 # ================= CONFIG =================
 TOKEN = os.getenv("BOT_TOKEN")
 PROOF_CHANNEL = os.getenv("PROOF_CHANNEL")
@@ -24,7 +17,6 @@ PROOF_CHANNEL = os.getenv("PROOF_CHANNEL")
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN missing")
 
-# 👉 ADD YOUR ADMIN IDS HERE
 ADMIN_IDS = [6138132255, 5635739078]
 
 # ================= DB =================
@@ -71,7 +63,7 @@ def duration(start):
 
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Escrow Bot is Running")
+    await update.message.reply_text("Escrow Bot Running ✅")
 
 # ================= DEAL =================
 async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -112,7 +104,7 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("❌ Admin only")
 
     if not update.message.reply_to_message:
-        return await update.message.reply_text("Reply to deal message")
+        return await update.message.reply_text("Reply to deal")
 
     msg_id = update.message.reply_to_message.message_id
 
@@ -129,8 +121,7 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     did, seller, buyer, amount, method = row
 
     cursor.execute("""
-    UPDATE deals
-    SET status=?, activator_admin_id=?
+    UPDATE deals SET status=?, activator_admin_id=?
     WHERE id=?
     """, ("ACTIVE", update.effective_user.id, did))
 
@@ -203,11 +194,7 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    parts = q.data.split("_")
-    if len(parts) != 2:
-        return
-
-    action, did = parts
+    action, did = q.data.split("_")
     did = int(did)
 
     cursor.execute("""
@@ -216,6 +203,7 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """, (did,))
 
     row = cursor.fetchone()
+
     if not row:
         return
 
@@ -269,6 +257,7 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """, (did,))
 
     row = cursor.fetchone()
+
     if not row:
         return
 
@@ -313,13 +302,14 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return await update.message.reply_text("❌ Admin only")
 
-    cursor.execute("SELECT handled_by, status FROM deals WHERE handled_by IS NOT NULL")
+    cursor.execute("""
+    SELECT handled_by, status FROM deals WHERE handled_by IS NOT NULL
+    """)
     rows = cursor.fetchall()
 
     stats = {}
 
     for admin, status in rows:
-
         admin = admin.strip()
 
         if admin not in stats:
@@ -369,6 +359,15 @@ def main():
     app.add_handler(CommandHandler("cancel", cancel))
 
     app.add_handler(CommandHandler("leaderboard", leaderboard))
+
+    app.add_handler(CallbackQueryHandler(buyer_buttons, pattern="^(acc|rej)_"))
+    app.add_handler(CallbackQueryHandler(admin_buttons, pattern="^adm_"))
+
+    print("Bot running...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()add_handler(CommandHandler("leaderboard", leaderboard))
 
     app.add_handler(CallbackQueryHandler(buyer_buttons, pattern="^(acc|rej)_"))
     app.add_handler(CallbackQueryHandler(admin_buttons, pattern="^adm_"))
