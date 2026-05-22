@@ -11,6 +11,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 PROOF_CHANNEL = os.getenv("PROOF_CHANNEL", "")
 
+
 # ================= DB =================
 conn = sqlite3.connect("escrow.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -38,6 +39,21 @@ def clean_username(u: str):
     return (u or "").replace("@", "").replace("seller:", "").replace("buyer:", "").strip().lower()
 
 
+def format_deal_id(deal_id: int):
+    return f"#{deal_id:03d}"
+
+
+def format_duration(start_time):
+    seconds = int(time.time() - start_time)
+    minutes = seconds // 60
+    hours = minutes // 60
+    minutes = minutes % 60
+
+    if hours > 0:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
@@ -57,9 +73,8 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     seller = clean_username(context.args[0])
     buyer = clean_username(context.args[1])
 
-    # 💰 IMPORTANT: preserve raw amount + currency exactly
-    amount = context.args[2]   # NO CLEANING → keeps 400$, 300 ETB, etc.
-    method = " ".join(context.args[3:])  # also raw
+    amount = context.args[2]          # keep currency EXACT
+    method = " ".join(context.args[3:])
 
     cursor.execute("""
     INSERT INTO deals (
@@ -78,7 +93,7 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     deal_id = cursor.lastrowid
 
     msg = await update.message.reply_text(
-        f"DEAL #{deal_id}\n"
+        f"DEAL {format_deal_id(deal_id)}\n"
         f"Seller: @{seller}\n"
         f"Buyer: @{buyer}\n"
         f"Amount: {amount}\n"
@@ -112,15 +127,11 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     deal_id, seller, buyer, amount, method = deal
 
-    cursor.execute("""
-    UPDATE deals SET status=?
-    WHERE id=?
-    """, ("ACTIVE", deal_id))
-
+    cursor.execute("UPDATE deals SET status=? WHERE id=?", ("ACTIVE", deal_id))
     conn.commit()
 
     await update.message.reply_text(
-        f"DEAL ACTIVATED #{deal_id}\n\n"
+        f"DEAL ACTIVATED {format_deal_id(deal_id)}\n\n"
         f"Seller: @{seller}\n"
         f"Buyer: @{buyer}\n"
         f"Amount: {amount}\n"
@@ -157,7 +168,6 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
 
     sender = clean_username(update.effective_user.username)
 
-    # ✔ FIXED SELLER CHECK
     if sender != seller:
         await update.message.reply_text("Only seller can do this")
         return
@@ -192,7 +202,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await seller_action(update, context, "cancel")
 
 
-# ================= BUYER BUTTONS =================
+# ================= BUYER =================
 async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
@@ -226,6 +236,11 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     cursor.execute("""
+    SELECT created_at FROM deals WHERE id=?
+    """, (deal_id,))
+    created_at = cursor.fetchone()[0]
+
+    cursor.execute("""
     UPDATE deals SET buyer_confirmed=1, status=?
     WHERE id=?
     """, (f"{action_type.upper()}_CONFIRMED", deal_id))
@@ -234,7 +249,7 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     admin_text = (
         f"📌 ESCROW ADMIN REVIEW\n\n"
-        f"Deal ID: {deal_id}\n"
+        f"Deal ID: {format_deal_id(deal_id)}\n"
         f"Action: {action_type.upper()}\n"
         f"Buyer: @{buyer}\n\n"
         f"Approve or Cancel below:"
@@ -256,7 +271,7 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ================= ADMIN BUTTONS =================
+# ================= ADMIN =================
 async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
@@ -271,7 +286,7 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     deal_id = int(data[2])
 
     cursor.execute("""
-    SELECT seller_username, buyer_username, amount, method
+    SELECT seller_username, buyer_username, amount, method, created_at
     FROM deals WHERE id=?
     """, (deal_id,))
 
@@ -280,17 +295,21 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not deal:
         return
 
-    seller, buyer, amount, method = deal
+    seller, buyer, amount, method, created_at = deal
+
+    duration = format_duration(created_at)
 
     status = "COMPLETED" if action == "ok" else "CANCELLED"
 
     text = (
         f"📢 FINAL RESULT\n\n"
-        f"Seller: @{seller}\n"
-        f"Buyer: @{buyer}\n"
-        f"Amount: {amount}\n"
-        f"Method: {method}\n"
-        f"Status: {status}"
+        f"🆔 Deal ID: {format_deal_id(deal_id)}\n"
+        f"👤 Seller: @{seller}\n"
+        f"👤 Buyer: @{buyer}\n"
+        f"💰 Amount: {amount}\n"
+        f"💳 Method: {method}\n"
+        f"⏱ Duration: {duration}\n"
+        f"📌 Status: {status}"
     )
 
     await query.edit_message_text(text)
