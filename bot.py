@@ -6,11 +6,13 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
 
+# ================= ENV =================
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 PROOF_CHANNEL = os.getenv("PROOF_CHANNEL", "")
 
 
+# ================= DATABASE =================
 conn = sqlite3.connect("escrow.db", check_same_thread=False)
 cursor = conn.cursor()
 
@@ -33,6 +35,7 @@ CREATE TABLE IF NOT EXISTS deals (
 conn.commit()
 
 
+# ================= HELPERS =================
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
@@ -40,19 +43,20 @@ def is_admin(user_id):
 def format_duration(seconds):
     minutes = int(seconds // 60)
     hours = int(minutes // 60)
-
     if hours > 0:
         return f"{hours}h {minutes % 60}m"
     return f"{minutes}m"
 
 
+# ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Escrow Bot Running\n"
+        "Escrow Bot Running\n\n"
         "/deal @seller @buyer amount method"
     )
 
 
+# ================= DEAL =================
 async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if len(context.args) < 4:
         await update.message.reply_text("Usage: /deal @seller @buyer amount method")
@@ -80,18 +84,22 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
 
 
+# ================= ACTIVATE =================
 async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
 
     if not update.message.reply_to_message:
-        await update.message.reply_text("Reply to a deal message")
+        await update.message.reply_text("Reply to deal message")
         return
 
     msg_id = update.message.reply_to_message.message_id
 
-    cursor.execute("SELECT id, seller_username, buyer_username, amount, method FROM deals WHERE deal_message_id=?",
-                   (msg_id,))
+    cursor.execute("""
+    SELECT id, seller_username, buyer_username, amount, method
+    FROM deals WHERE deal_message_id=?
+    """, (msg_id,))
+
     deal = cursor.fetchone()
 
     if not deal:
@@ -100,8 +108,11 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     deal_id, seller, buyer, amount, method = deal
 
-    cursor.execute("UPDATE deals SET status=?, handled_by=? WHERE id=?",
-                   ("ACTIVE", update.effective_user.username or "admin", deal_id))
+    cursor.execute("""
+    UPDATE deals SET status=?, handled_by=?
+    WHERE id=?
+    """, ("ACTIVE", update.effective_user.username or "admin", deal_id))
+
     conn.commit()
 
     new_msg = await update.message.reply_text(
@@ -112,6 +123,7 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
 
 
+# ================= SELLER ACTION =================
 async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, action):
     if not update.message.reply_to_message:
         await update.message.reply_text("Reply to activated deal")
@@ -165,6 +177,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await seller_action(update, context, "cancel")
 
 
+# ================= CALLBACK BUTTONS =================
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -195,7 +208,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if decision == "rej":
-        await query.edit_message_text("Buyer rejected")
+        await query.edit_message_text("Buyer rejected request")
         return
 
     end = time.time()
@@ -210,11 +223,12 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("Admin Confirm", callback_data=f"admin_{deal_id}")]]
 
     await query.edit_message_text(
-        f"{status}\nWaiting admin confirmation",
+        f"{status}\nWaiting admin confirmation\n⏱ {duration}",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
+# ================= ADMIN CONFIRM =================
 async def admin_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -244,7 +258,7 @@ async def admin_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Seller: {seller}\nBuyer: {buyer}\n"
         f"Amount: {amount}\nMethod: {method}\n"
         f"Handled by: @{handled_by}\n"
-        f"Duration: {duration}"
+        f"⏱ Duration: {duration}"
     )
 
     await query.edit_message_text(text)
@@ -253,6 +267,7 @@ async def admin_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(PROOF_CHANNEL, text)
 
 
+# ================= MAIN =================
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
@@ -264,75 +279,5 @@ app.add_handler(CommandHandler("cancel", cancel))
 
 app.add_handler(CallbackQueryHandler(admin_confirm, pattern="^admin_"))
 app.add_handler(CallbackQueryHandler(buttons))
-
-app.run_polling()  "✅ Admin Confirm",
-                callback_data=f"adminconfirm_{deal_id}"
-            )
-        ]
-    ]
-
-    await query.edit_message_text(
-        f"{status_text}\n\n"
-        f"Waiting for admin confirmation...",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-
-# =========================
-# MAIN
-# =========================
-
-app = ApplicationBuilder().token(TOKEN).build()
-
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("deal", deal))
-app.add_handler(CommandHandler("activate", activate))
-app.add_handler(CommandHandler("release", release))
-app.add_handler(CommandHandler("refund", refund))
-app.add_handler(CommandHandler("cancel", cancel))
-
-app.add_handler(CallbackQueryHandler(buttons))
-
-print("🚀 Escrow Bot v5 Fixed Running...")
-
-app.run_polling()ndled by: @{handled_by}\n\n"
-        f"⏱ Duration: {duration}\n\n"
-        f"Status: {status}"
-    )
-
-    await query.edit_message_text(final_text)
-
-    if PROOF_CHANNEL:
-        await context.bot.send_message(
-            chat_id=PROOF_CHANNEL,
-            text=final_text
-        )
-
-
-# =========================
-# MAIN
-# =========================
-
-app = ApplicationBuilder().token(TOKEN).build()
-
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("deal", deal))
-app.add_handler(CommandHandler("activate", activate))
-app.add_handler(CommandHandler("release", release))
-app.add_handler(CommandHandler("refund", refund))
-app.add_handler(CommandHandler("cancel", cancel))
-
-app.add_handler(
-    CallbackQueryHandler(
-        admin_confirm,
-        pattern="^adminconfirm_"
-    )
-)
-
-app.add_handler(
-    CallbackQueryHandler(buttons)
-)
-
-print("🚀 Escrow Bot v5 Running...")
 
 app.run_polling()
