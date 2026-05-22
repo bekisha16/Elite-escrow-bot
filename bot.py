@@ -87,8 +87,7 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ━━━━━━━━━━━━━━
 """
 
-    await context.bot.send_message(PROOF_CHANNEL, message)
-
+    await update.message.reply_text(message)
     await update.message.reply_text(
         f"✅ Deal posted successfully #{deal_id:04d}"
     )
