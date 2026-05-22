@@ -27,22 +27,23 @@ CREATE TABLE IF NOT EXISTS deals (
 conn.commit()
 
 
-# START
+# ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Bot works ✅")
 
 
-# CREATE DEAL
+# ================= DEAL =================
 async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(context.args) < 4:
         await update.message.reply_text("Usage: /deal @seller @buyer amount method")
         return
 
-    seller = context.args[0]
-    buyer = context.args[1]
-    amount = context.args[2]
-    method = " ".join(context.args[3:])
+    # CLEAN INPUT (fix duplicate label issues)
+    seller = context.args[0].replace("seller:", "").strip()
+    buyer = context.args[1].replace("buyer:", "").strip()
+    amount = context.args[2].replace("Amount:", "").replace("$", "").strip()
+    method = " ".join(context.args[3:]).replace("Method:", "").strip()
 
     cursor.execute("""
     INSERT INTO deals (seller_username, buyer_username, amount, method, status, created_at)
@@ -58,7 +59,7 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Seller: {seller}\n"
         f"Buyer: {buyer}\n"
         f"Amount: {amount}\n"
-        f"Method: {method}\n"
+        f"Method: {method}\n\n"
         f"Waiting activation..."
     )
 
@@ -66,7 +67,7 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
 
 
-# SIMPLE ACTIVATE
+# ================= ACTIVATE =================
 async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not update.message.reply_to_message:
@@ -105,7 +106,7 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# RELEASE (SIMPLE)
+# ================= RELEASE =================
 async def release(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not update.message.reply_to_message:
@@ -115,7 +116,7 @@ async def release(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_id = update.message.reply_to_message.message_id
 
     cursor.execute("""
-    SELECT id, seller_username, buyer_username, status
+    SELECT id, seller_username, status
     FROM deals WHERE deal_message_id=?
     """, (msg_id,))
 
@@ -125,26 +126,31 @@ async def release(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Deal not found")
         return
 
-    deal_id, seller, buyer, status = deal
+    deal_id, seller, status = deal
 
     if status != "ACTIVE":
         await update.message.reply_text("Deal not active")
         return
 
-    sender = f"@{update.effective_user.username}"
+    sender = update.effective_user.username
 
-    if sender != seller:
+    if not sender:
+        await update.message.reply_text("You must have a Telegram username")
+        return
+
+    # FIXED SELLER CHECK
+    if f"@{sender}".lower() != seller.lower():
         await update.message.reply_text("Only seller can do this")
         return
 
     await update.message.reply_text(
         f"SELLER RELEASE REQUESTED\n\n"
-        f"Buyer: {buyer}\n"
-        f"Please confirm manually (no buttons in this version)."
+        f"Seller: {seller}\n"
+        f"Please confirm manually for now."
     )
 
 
-# APP
+# ================= MAIN =================
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
