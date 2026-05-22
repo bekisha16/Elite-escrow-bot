@@ -13,6 +13,9 @@ from telegram.ext import (
 # ================= CONFIG =================
 TOKEN = os.getenv("BOT_TOKEN")
 
+if not TOKEN:
+    raise RuntimeError("BOT_TOKEN is missing in environment variables")
+
 ADMIN_IDS = [
     6138132255,
     5635739078
@@ -44,8 +47,10 @@ CREATE TABLE IF NOT EXISTS deals (
 
 conn.commit()
 
+# ================= SAFE HELPERS =================
+def safe_username(user):
+    return (user.username or str(user.id)).lower()
 
-# ================= HELPERS =================
 def clean_username(u: str):
     return (
         (u or "")
@@ -56,10 +61,8 @@ def clean_username(u: str):
         .lower()
     )
 
-
 def format_deal_id(deal_id: int):
     return f"#{deal_id:03d}"
-
 
 def format_duration(start_time):
     seconds = int(time.time() - start_time)
@@ -70,11 +73,9 @@ def format_duration(start_time):
 
     return f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
 
-
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Escrow Bot Running ✅")
-
 
 # ================= DEAL =================
 async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -120,7 +121,6 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn.commit()
 
-
 # ================= ACTIVATE =================
 async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -148,7 +148,6 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     deal_id, seller, buyer, amount, method = deal
 
-    # 🔐 LOCK ADMIN WHO ACTIVATED
     cursor.execute("""
     UPDATE deals
     SET status=?,
@@ -165,7 +164,6 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Amount: {amount}\n"
         f"Method: {method}"
     )
-
 
 # ================= SELLER ACTION =================
 async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, action):
@@ -198,7 +196,7 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
         await update.message.reply_text("⚠ Action already processed")
         return
 
-    sender = clean_username(update.effective_user.username)
+    sender = clean_username(safe_username(update.effective_user))
 
     if sender != seller:
         await update.message.reply_text("Only seller can do this")
@@ -222,7 +220,6 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-
 async def release(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await seller_action(update, context, "release")
 
@@ -231,7 +228,6 @@ async def refund(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await seller_action(update, context, "cancel")
-
 
 # ================= BUYER BUTTONS =================
 async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -255,9 +251,9 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     buyer, action_type = deal
-    buyer = clean_username(buyer)
 
-    user = clean_username(query.from_user.username)
+    buyer = clean_username(buyer)
+    user = clean_username(safe_username(query.from_user))
 
     if user != buyer:
         await query.answer("Not buyer", show_alert=True)
@@ -298,12 +294,15 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-
 # ================= ADMIN BUTTONS =================
 async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
+
+    if query.from_user.id not in ADMIN_IDS:
+        await query.answer("Admin only", show_alert=True)
+        return
 
     data = query.data.split("_")
     action = data[1]
@@ -328,10 +327,10 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     activator_id, seller, buyer, amount, method, created_at, action_type = deal
 
-    # 🔐 ONLY ACTIVATING ADMIN CAN APPROVE
+    # ONLY ACTIVATING ADMIN CAN APPROVE
     if query.from_user.id != activator_id:
         await query.answer(
-            "Only the admin who activated this deal can approve it",
+            "Only activating admin can approve this deal",
             show_alert=True
         )
         return
@@ -339,14 +338,12 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     duration = format_duration(created_at)
 
     if action == "ok":
-
         if action_type == "refund":
             status = "REFUNDED"
         elif action_type == "cancel":
             status = "CANCELLED"
         else:
             status = "COMPLETED"
-
     else:
         status = "CANCELLED"
 
@@ -373,7 +370,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text(text)
 
-
 # ================= MAIN =================
 app = ApplicationBuilder().token(TOKEN).build()
 
@@ -388,15 +384,7 @@ app.add_handler(CommandHandler("cancel", cancel))
 app.add_handler(CallbackQueryHandler(buyer_buttons, pattern="^(acc|rej)_"))
 app.add_handler(CallbackQueryHandler(admin_buttons, pattern="^adm_"))
 
-app.run_polling()en(TOKEN).build()
-
-app.add_handler(CommandHandler("start", start))
-
-app.add_handler(CommandHandler("deal", deal))
-app.add_handler(CommandHandler("activate", activate))
-
-app.add_handler(CommandHandler("release", release))
-app.add_handler(CommandHandler("refund", refund))
+app.run_polling()app.add_handler(CommandHandler("refund", refund))
 app.add_handler(CommandHandler("cancel", cancel))
 
 app.add_handler(
