@@ -53,7 +53,7 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     seller = context.args[0].replace("seller:", "").strip()
     buyer = context.args[1].replace("buyer:", "").strip()
     amount = context.args[2].replace("$", "").strip()
-    method = " ".join(context.args[3:]).replace("Method:", "").strip()
+    method = " ".join(context.args[3:]).strip()
 
     cursor.execute("""
     INSERT INTO deals (
@@ -168,9 +168,7 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
     ]]
 
     await update.message.reply_text(
-        f"⚠ Seller requested: {action.upper()}\n\n"
-        f"Buyer: {buyer}\n"
-        f"Please respond:",
+        f"⚠ Seller requested: {action.upper()}\n\nBuyer please confirm:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -226,17 +224,34 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn.commit()
 
+    # ================= ADMIN PANEL (FIXED) =================
+    admin_text = (
+        f"📌 ADMIN APPROVAL REQUIRED\n\n"
+        f"Deal ID: {deal_id}\n"
+        f"Action: {action_type.upper()}\n"
+        f"Buyer: {buyer}\n\n"
+        f"Approve or Cancel this deal:"
+    )
+
     keyboard = [[
         InlineKeyboardButton("✅ Approve", callback_data=f"adm_ok_{deal_id}"),
         InlineKeyboardButton("❌ Cancel", callback_data=f"adm_no_{deal_id}")
     ]]
 
+    # show buyer confirmation
     await query.edit_message_text(
         f"✅ Buyer confirmed {action_type.upper()}\n\nWaiting admin approval..."
     )
 
+    # send admin panel
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=admin_text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
-# ================= ADMIN =================
+
+# ================= ADMIN BUTTONS =================
 async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
@@ -251,7 +266,7 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     deal_id = int(data[2])
 
     cursor.execute("""
-    SELECT seller_username, buyer_username, amount, method, status
+    SELECT seller_username, buyer_username, amount, method
     FROM deals WHERE id=?
     """, (deal_id,))
 
@@ -260,7 +275,7 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not deal:
         return
 
-    seller, buyer, amount, method, status = deal
+    seller, buyer, amount, method = deal
 
     final_status = "COMPLETED" if action == "ok" else "CANCELLED"
 
