@@ -55,10 +55,6 @@ def format_duration(start_time):
     return f"{minutes}m"
 
 
-def is_admin(user_id):
-    return user_id == ADMIN_ID
-
-
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Escrow Bot Running ✅")
@@ -74,7 +70,7 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     seller = clean_username(context.args[0])
     buyer = clean_username(context.args[1])
 
-    amount = context.args[2]          # keep currency exact
+    amount = context.args[2]
     method = " ".join(context.args[3:])
 
     cursor.execute("""
@@ -93,17 +89,20 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     deal_id = cursor.lastrowid
 
-    msg = await update.message.reply_text(
-        f"DEAL {format_deal_id(deal_id)}\n"
-        f"Seller: @{seller}\n"
-        f"Buyer: @{buyer}\n"
-        f"Amount: {amount}\n"
-        f"Method: {method}\n\n"
-        f"Waiting activation..."
+    # ================= ADMIN NOTIFICATION =================
+    await update.message.reply_text(
+        f"🚨 NEW ESCROW DEAL 🚨\n\n"
+        f"🆔 DEAL {format_deal_id(deal_id)}\n"
+        f"👤 Seller: @{seller}\n"
+        f"👤 Buyer: @{buyer}\n"
+        f"💰 Amount: {amount}\n"
+        f"💳 Method: {method}\n\n"
+        f"👮 Admin please activate using /activate"
     )
 
-    cursor.execute("UPDATE deals SET deal_message_id=? WHERE id=?", (msg.message_id, deal_id))
-    conn.commit()
+    await update.message.reply_text(
+        f"🔔 Admin Alert: New deal {format_deal_id(deal_id)} needs activation"
+    )
 
 
 # ================= ACTIVATE =================
@@ -137,7 +136,7 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Buyer: @{buyer}\n"
         f"Amount: {amount}\n"
         f"Method: {method}\n\n"
-        f"Seller can now request actions"
+        f"Ready for escrow actions"
     )
 
 
@@ -180,13 +179,24 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
 
     conn.commit()
 
+    # ================= BUYER NOTIFICATION =================
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=(
+            f"⚠️ ESCROW ACTION REQUEST ⚠️\n\n"
+            f"🆔 Deal {format_deal_id(deal_id)}\n"
+            f"👤 Seller @{seller} requested: {action.upper()}\n\n"
+            f"👉 Buyer please respond using buttons"
+        )
+    )
+
     keyboard = [[
         InlineKeyboardButton("✅ Accept", callback_data=f"acc_{deal_id}"),
         InlineKeyboardButton("❌ Reject", callback_data=f"rej_{deal_id}")
     ]]
 
     await update.message.reply_text(
-        f"⚠ Seller requested: {action.upper()}\n\nBuyer please confirm:",
+        f"Waiting buyer confirmation...",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -203,7 +213,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await seller_action(update, context, "cancel")
 
 
-# ================= BUYER =================
+# ================= BUYER BUTTONS =================
 async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
@@ -248,7 +258,7 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Deal ID: {format_deal_id(deal_id)}\n"
         f"Action: {action_type.upper()}\n"
         f"Buyer: @{buyer}\n\n"
-        f"Approve or Cancel below:"
+        f"Approve or Cancel"
     )
 
     keyboard = [[
@@ -257,7 +267,7 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]]
 
     await query.edit_message_text(
-        f"✅ Buyer confirmed {action_type.upper()}\n\nWaiting admin approval..."
+        f"Buyer confirmed. Waiting admin..."
     )
 
     await context.bot.send_message(
@@ -295,7 +305,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     duration = format_duration(created_at)
 
-    # ================= FIXED STATUS LOGIC =================
     if action == "ok":
         cursor.execute("SELECT action_type FROM deals WHERE id=?", (deal_id,))
         row = cursor.fetchone()
@@ -310,7 +319,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         status = "CANCELLED"
 
-    # ================= SAVE HANDLED BY =================
     cursor.execute("""
     UPDATE deals SET handled_by=?
     WHERE id=?
@@ -330,9 +338,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await query.edit_message_text(text)
-
-    if PROOF_CHANNEL:
-        await context.bot.send_message(PROOF_CHANNEL, text)
 
 
 # ================= MAIN =================
