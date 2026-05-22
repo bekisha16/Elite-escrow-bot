@@ -18,13 +18,13 @@ if not TOKEN:
 
 ADMIN_IDS = [6138132255, 5635739078]
 
-# ================= SAFE WEBHOOK REMOVE =================
+# ================= DELETE WEBHOOK (IMPORTANT) =================
 try:
     requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook")
 except:
     pass
 
-# ================= DB =================
+# ================= DATABASE =================
 conn = sqlite3.connect("escrow.db", check_same_thread=False)
 cursor = conn.cursor()
 
@@ -77,7 +77,7 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     did = cursor.lastrowid
 
     msg = await update.message.reply_text(
-        f"NEW DEAL {deal_id(did)}\n"
+        f"🚨 NEW DEAL {deal_id(did)}\n"
         f"Seller: @{seller}\n"
         f"Buyer: @{buyer}\n"
         f"Amount: {amount}\n"
@@ -107,7 +107,8 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     did = row[0]
 
     cursor.execute("""
-    UPDATE deals SET status=? WHERE id=?
+    UPDATE deals SET status=?
+    WHERE id=?
     """, ("ACTIVE", did))
 
     conn.commit()
@@ -192,7 +193,7 @@ async def buyer(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await q.edit_message_text("Confirmed")
 
-# ================= LEADERBOARD (FIXED FINAL VERSION) =================
+# ================= LEADERBOARD (FIXED @USERNAME DISPLAY) =================
 async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.effective_user.id not in ADMIN_IDS:
@@ -213,28 +214,28 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not admin:
             continue
 
-        name = str(admin).strip()
+        admin_name = str(admin).strip()
 
-        # FIX: always show proper @username format
-        if not name.startswith("@"):
-            name = "@" + name
+        # FIX: always show @username format
+        if not admin_name.startswith("@"):
+            admin_name = "@" + admin_name
 
-        if name not in stats:
-            stats[name] = {
+        if admin_name not in stats:
+            stats[admin_name] = {
                 "total": 0,
                 "completed": 0,
                 "refunded": 0,
                 "cancelled": 0
             }
 
-        stats[name]["total"] += 1
+        stats[admin_name]["total"] += 1
 
         if status == "COMPLETED":
-            stats[name]["completed"] += 1
+            stats[admin_name]["completed"] += 1
         elif status == "REFUNDED":
-            stats[name]["refunded"] += 1
+            stats[admin_name]["refunded"] += 1
         elif status == "CANCELLED":
-            stats[name]["cancelled"] += 1
+            stats[admin_name]["cancelled"] += 1
 
     if not stats:
         return await update.message.reply_text("No leaderboard data yet.")
@@ -258,7 +259,6 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================= MAIN =================
 def main():
-
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -276,68 +276,4 @@ def main():
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
-    main()IDS:
-        return
-
-    cursor.execute("SELECT handled_by, status FROM deals WHERE handled_by IS NOT NULL")
-    rows = cursor.fetchall()
-
-    stats = {}
-
-    for admin, status in rows:
-
-        admin = admin.strip()
-
-        if admin not in stats:
-            stats[admin] = {
-                "total": 0,
-                "completed": 0,
-                "refunded": 0,
-                "cancelled": 0
-            }
-
-        stats[admin]["total"] += 1
-
-        if status == "COMPLETED":
-            stats[admin]["completed"] += 1
-        elif status == "REFUNDED":
-            stats[admin]["refunded"] += 1
-        elif status == "CANCELLED":
-            stats[admin]["cancelled"] += 1
-
-    sorted_admins = sorted(stats.items(), key=lambda x: x[1]["total"], reverse=True)
-
-    text = "🏆 ADMIN LEADERBOARD\n\n"
-
-    rank = 1
-    for admin, data in sorted_admins:
-        text += (
-            f"{rank}. {admin}\n"
-            f"📦 Total: {data['total']}\n"
-            f"✅ Completed: {data['completed']}\n"
-            f"💸 Refunded: {data['refunded']}\n"
-            f"❌ Cancelled: {data['cancelled']}\n\n"
-        )
-        rank += 1
-
-    await update.message.reply_text(text)
-
-# ================= MAIN =================
-app = ApplicationBuilder().token(TOKEN).build()
-
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("deal", deal))
-app.add_handler(CommandHandler("activate", activate))
-
-app.add_handler(CommandHandler("release", release))
-app.add_handler(CommandHandler("refund", refund))
-app.add_handler(CommandHandler("cancel", cancel))
-
-app.add_handler(CommandHandler("stats", stats))
-app.add_handler(CommandHandler("history", history))
-app.add_handler(CommandHandler("leaderboard", leaderboard))
-
-app.add_handler(CallbackQueryHandler(buyer_buttons, pattern="^(acc|rej)_"))
-app.add_handler(CallbackQueryHandler(admin_buttons, pattern="^adm_"))
-
-app.run_polling()
+    main()
