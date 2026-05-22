@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS deals (
     action_type TEXT,
     deal_message_id INTEGER,
     created_at REAL,
-    buyer_confirmed INTEGER DEFAULT 0
+    buyer_confirmed INTEGER DEFAULT 0,
+    handled_by TEXT
 )
 """)
 
@@ -73,7 +74,7 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     seller = clean_username(context.args[0])
     buyer = clean_username(context.args[1])
 
-    amount = context.args[2]          # keep currency exactly
+    amount = context.args[2]          # keep currency exact
     method = " ".join(context.args[3:])
 
     cursor.execute("""
@@ -309,6 +310,13 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         status = "CANCELLED"
 
+    # ================= SAVE HANDLED BY =================
+    cursor.execute("""
+    UPDATE deals SET handled_by=?
+    WHERE id=?
+    """, (f"@{query.from_user.username}", deal_id))
+    conn.commit()
+
     text = (
         f"📢 FINAL RESULT\n\n"
         f"🆔 Deal ID: {format_deal_id(deal_id)}\n"
@@ -317,6 +325,7 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💰 Amount: {amount}\n"
         f"💳 Method: {method}\n"
         f"⏱ Duration: {duration}\n"
+        f"👮 Handled by: @{query.from_user.username}\n"
         f"📌 Status: {status}"
     )
 
