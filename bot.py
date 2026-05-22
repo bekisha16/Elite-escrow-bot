@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS deals (
     deal_message_id INTEGER,
     created_at REAL,
     buyer_confirmed INTEGER DEFAULT 0,
-    handled_by TEXT
+    handled_by TEXT,
+    action_locked INTEGER DEFAULT 0
 )
 """)
 
@@ -36,6 +37,17 @@ conn.commit()
 
 
 # ================= HELPERS =================
+def clean_username(u: str):
+    return (
+        (u or "")
+        .replace("@", "")
+        .replace("seller:", "")
+        .replace("buyer:", "")
+        .strip()
+        .lower()
+    )
+
+
 def format_deal_id(deal_id: int):
     return f"#{deal_id:03d}"
 
@@ -63,8 +75,8 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /deal @seller @buyer amount method")
         return
 
-    seller = context.args[0].replace("@", "")
-    buyer = context.args[1].replace("@", "")
+    seller = clean_username(context.args[0])
+    buyer = clean_username(context.args[1])
 
     amount = context.args[2]
     method = " ".join(context.args[3:])
@@ -85,21 +97,25 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     deal_id = cursor.lastrowid
 
-    await update.message.reply_text(
-        f"🚨 NEW ESCROW DEAL 🚨\n\n"
-        f"🆔 DEAL {format_deal_id(deal_id)}\n"
-        f"👤 Seller: {seller}\n"
-        f"👤 Buyer: {buyer}\n"
-        f"💰 Amount: {amount}\n"
-        f"💳 Method: {method}\n\n"
-        f"👮 Admin will activate this deal"
+    msg = await update.message.reply_text(
+        f"🚨 NEW DEAL {format_deal_id(deal_id)}\n\n"
+        f"Seller: @{seller}\n"
+        f"Buyer: @{buyer}\n"
+        f"Amount: {amount}\n"
+        f"Method: {method}\n\n"
+        f"Waiting activation..."
     )
 
+    cursor.execute(
+        "UPDATE deals SET deal_message_id=? WHERE id=?",
+        (msg.message_id, deal_id)
+    )
+    conn.commit()
 
-# ================= ACTIVATE (ADMIN ONLY FIXED) =================
+
+# ================= ACTIVATE =================
 async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    # 🔒 SECURITY CHECK
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ Only admins can activate deals")
         return
@@ -123,16 +139,18 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     deal_id, seller, buyer, amount, method = deal
 
-    cursor.execute("UPDATE deals SET status=? WHERE id=?", ("ACTIVE", deal_id))
+    cursor.execute(
+        "UPDATE deals SET status=? WHERE id=?",
+        ("ACTIVE", deal_id)
+    )
     conn.commit()
 
     await update.message.reply_text(
         f"✅ DEAL ACTIVATED {format_deal_id(deal_id)}\n\n"
-        f"👤 Seller: {seller}\n"
-        f"👤 Buyer: {buyer}\n"
-        f"💰 Amount: {amount}\n"
-        f"💳 Method: {method}\n\n"
-        f"🔒 Deal is now active"
+        f"Seller: @{seller}\n"
+        f"Buyer: @{buyer}\n"
+        f"Amount: {amount}\n"
+        f"Method: {method}"
     )
 
 
@@ -146,7 +164,7 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
     msg_id = update.message.reply_to_message.message_id
 
     cursor.execute("""
-    SELECT id, seller_username, buyer_username, status
+    SELECT id, seller_username, buyer_username, status, action_locked
     FROM deals WHERE deal_message_id=?
     """, (msg_id,))
 
@@ -156,20 +174,26 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
         await update.message.reply_text("Deal not found")
         return
 
-    deal_id, seller, buyer, status = deal
+    deal_id, seller, buyer, status, locked = deal
 
     if status != "ACTIVE":
         await update.message.reply_text("Deal not active")
         return
 
-    sender = (update.effective_user.username or "").replace("@", "").lower()
+    # 🔒 prevent duplication
+    if locked == 1:
+        await update.message.reply_text("⚠ Action already processed")
+        return
 
-    if sender != seller.lower():
+    sender = clean_username(update.effective_user.username)
+
+    if sender != seller:
         await update.message.reply_text("Only seller can do this")
         return
 
     cursor.execute("""
-    UPDATE deals SET action_type=?
+    UPDATE deals
+    SET action_type=?, action_locked=1
     WHERE id=?
     """, (action, deal_id))
 
@@ -219,9 +243,9 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     buyer, action_type = deal
-    buyer = buyer.lower()
+    buyer = clean_username(buyer)
 
-    user = (query.from_user.username or "").replace("@", "").lower()
+    user = clean_username(query.from_user.username)
 
     if user != buyer:
         await query.answer("Not buyer", show_alert=True)
@@ -294,6 +318,7 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     UPDATE deals SET handled_by=?
     WHERE id=?
     """, (f"@{query.from_user.username}", deal_id))
+
     conn.commit()
 
     text = (
@@ -304,7 +329,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💰 Amount: {amount}\n"
         f"💳 Method: {method}\n"
         f"⏱ Duration: {duration}\n"
-        f"👮 Handled by: @{query.from_user.username}\n"
         f"📌 Status: {status}"
     )
 
