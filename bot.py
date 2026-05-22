@@ -47,9 +47,8 @@ conn.commit()
 def clean_username(u):
     return (u or "").replace("@", "").replace("seller:", "").replace("buyer:", "").strip().lower()
 
-# 🔥 FIX: clean amount/method formatting
-def clean_field(value):
-    v = (value or "").strip()
+def clean_field(v):
+    v = (v or "").strip()
     v = v.replace("amount:", "").replace("Amount:", "")
     v = v.replace("method:", "").replace("Method:", "")
     return v.strip()
@@ -79,8 +78,6 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     seller = clean_username(context.args[0])
     buyer = clean_username(context.args[1])
-
-    # ✅ CLEAN FIX APPLIED HERE
     amount = clean_field(context.args[2])
     method = clean_field(" ".join(context.args[3:]))
 
@@ -306,12 +303,104 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if PROOF_CHANNEL:
         try:
-            await context.bot.send_message(
-                chat_id=PROOF_CHANNEL,
-                text=text
-            )
-        except Exception as e:
-            print("Channel post error:", e)
+            await context.bot.send_message(chat_id=PROOF_CHANNEL, text=text)
+        except:
+            pass
+
+# ================= STATS =================
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+
+    cursor.execute("SELECT status FROM deals")
+    rows = cursor.fetchall()
+
+    await update.message.reply_text(
+        f"📊 ESCROW STATS\n\n"
+        f"Total: {len(rows)}\n"
+        f"Completed: {sum(1 for r in rows if r[0]=='COMPLETED')}\n"
+        f"Refunded: {sum(1 for r in rows if r[0]=='REFUNDED')}\n"
+        f"Cancelled: {sum(1 for r in rows if r[0]=='CANCELLED')}\n"
+        f"Active: {sum(1 for r in rows if r[0]=='ACTIVE')}"
+    )
+
+# ================= HISTORY =================
+async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if len(context.args) < 1:
+        return await update.message.reply_text("Usage: /history @user")
+
+    user = clean_username(context.args[0])
+
+    cursor.execute("""
+    SELECT id, seller_username, buyer_username, amount, method, status
+    FROM deals
+    WHERE seller_username=? OR buyer_username=?
+    ORDER BY id DESC
+    LIMIT 10
+    """, (user, user))
+
+    rows = cursor.fetchall()
+
+    if not rows:
+        return await update.message.reply_text("No deals found")
+
+    text = f"📦 HISTORY @{user}\n\n"
+
+    for did, seller, buyer, amount, method, status in rows:
+        text += f"{deal_id(did)} | {status}\nS:@{seller} → B:@{buyer}\n{amount} | {method}\n\n"
+
+    await update.message.reply_text(text)
+
+# ================= LEADERBOARD =================
+async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.effective_user.id not in ADMIN_IDS:
+        return
+
+    cursor.execute("SELECT handled_by, status FROM deals WHERE handled_by IS NOT NULL")
+    rows = cursor.fetchall()
+
+    stats = {}
+
+    for admin, status in rows:
+
+        admin = admin.strip()
+
+        if admin not in stats:
+            stats[admin] = {
+                "total": 0,
+                "completed": 0,
+                "refunded": 0,
+                "cancelled": 0
+            }
+
+        stats[admin]["total"] += 1
+
+        if status == "COMPLETED":
+            stats[admin]["completed"] += 1
+        elif status == "REFUNDED":
+            stats[admin]["refunded"] += 1
+        elif status == "CANCELLED":
+            stats[admin]["cancelled"] += 1
+
+    sorted_admins = sorted(stats.items(), key=lambda x: x[1]["total"], reverse=True)
+
+    text = "🏆 ADMIN LEADERBOARD\n\n"
+
+    rank = 1
+    for admin, data in sorted_admins:
+        text += (
+            f"{rank}. {admin}\n"
+            f"📦 Total: {data['total']}\n"
+            f"✅ Completed: {data['completed']}\n"
+            f"💸 Refunded: {data['refunded']}\n"
+            f"❌ Cancelled: {data['cancelled']}\n\n"
+        )
+        rank += 1
+
+    await update.message.reply_text(text)
 
 # ================= MAIN =================
 app = ApplicationBuilder().token(TOKEN).build()
@@ -323,6 +412,10 @@ app.add_handler(CommandHandler("activate", activate))
 app.add_handler(CommandHandler("release", release))
 app.add_handler(CommandHandler("refund", refund))
 app.add_handler(CommandHandler("cancel", cancel))
+
+app.add_handler(CommandHandler("stats", stats))
+app.add_handler(CommandHandler("history", history))
+app.add_handler(CommandHandler("leaderboard", leaderboard))
 
 app.add_handler(CallbackQueryHandler(buyer_buttons, pattern="^(acc|rej)_"))
 app.add_handler(CallbackQueryHandler(admin_buttons, pattern="^adm_"))
