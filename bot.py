@@ -36,10 +36,6 @@ conn.commit()
 
 
 # ================= HELPERS =================
-def clean_username(u: str):
-    return (u or "").replace("@", "").replace("seller:", "").replace("buyer:", "").strip().lower()
-
-
 def format_deal_id(deal_id: int):
     return f"#{deal_id:03d}"
 
@@ -55,10 +51,6 @@ def format_duration(start_time):
     return f"{minutes}m"
 
 
-def is_admin(user_id):
-    return user_id == ADMIN_ID
-
-
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Escrow Bot Running ✅")
@@ -71,10 +63,10 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /deal @seller @buyer amount method")
         return
 
-    seller = clean_username(context.args[0])
-    buyer = clean_username(context.args[1])
+    seller = context.args[0].replace("@", "")
+    buyer = context.args[1].replace("@", "")
 
-    amount = context.args[2]          # keep currency exact
+    amount = context.args[2]
     method = " ".join(context.args[3:])
 
     cursor.execute("""
@@ -93,24 +85,27 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     deal_id = cursor.lastrowid
 
-    msg = await update.message.reply_text(
-        f"DEAL {format_deal_id(deal_id)}\n"
-        f"Seller: @{seller}\n"
-        f"Buyer: @{buyer}\n"
-        f"Amount: {amount}\n"
-        f"Method: {method}\n\n"
-        f"Waiting activation..."
+    await update.message.reply_text(
+        f"🚨 NEW ESCROW DEAL 🚨\n\n"
+        f"🆔 DEAL {format_deal_id(deal_id)}\n"
+        f"👤 Seller: {seller}\n"
+        f"👤 Buyer: {buyer}\n"
+        f"💰 Amount: {amount}\n"
+        f"💳 Method: {method}\n\n"
+        f"👮 Admin will activate this deal"
     )
 
-    cursor.execute("UPDATE deals SET deal_message_id=? WHERE id=?", (msg.message_id, deal_id))
-    conn.commit()
 
-
-# ================= ACTIVATE =================
+# ================= ACTIVATE (ADMIN ONLY FIXED) =================
 async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
+    # 🔒 SECURITY CHECK
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ Only admins can activate deals")
+        return
+
     if not update.message.reply_to_message:
-        await update.message.reply_text("Reply to deal message")
+        await update.message.reply_text("❌ Reply to a deal message")
         return
 
     msg_id = update.message.reply_to_message.message_id
@@ -123,7 +118,7 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     deal = cursor.fetchone()
 
     if not deal:
-        await update.message.reply_text("Deal not found")
+        await update.message.reply_text("❌ Deal not found")
         return
 
     deal_id, seller, buyer, amount, method = deal
@@ -132,12 +127,12 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
 
     await update.message.reply_text(
-        f"DEAL ACTIVATED {format_deal_id(deal_id)}\n\n"
-        f"Seller: @{seller}\n"
-        f"Buyer: @{buyer}\n"
-        f"Amount: {amount}\n"
-        f"Method: {method}\n\n"
-        f"Seller can now request actions"
+        f"✅ DEAL ACTIVATED {format_deal_id(deal_id)}\n\n"
+        f"👤 Seller: {seller}\n"
+        f"👤 Buyer: {buyer}\n"
+        f"💰 Amount: {amount}\n"
+        f"💳 Method: {method}\n\n"
+        f"🔒 Deal is now active"
     )
 
 
@@ -167,9 +162,9 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
         await update.message.reply_text("Deal not active")
         return
 
-    sender = clean_username(update.effective_user.username)
+    sender = (update.effective_user.username or "").replace("@", "").lower()
 
-    if sender != seller:
+    if sender != seller.lower():
         await update.message.reply_text("Only seller can do this")
         return
 
@@ -224,9 +219,9 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     buyer, action_type = deal
-    buyer = clean_username(buyer)
+    buyer = buyer.lower()
 
-    user = clean_username(query.from_user.username)
+    user = (query.from_user.username or "").replace("@", "").lower()
 
     if user != buyer:
         await query.answer("Not buyer", show_alert=True)
@@ -243,27 +238,8 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn.commit()
 
-    admin_text = (
-        f"📌 ESCROW ADMIN REVIEW\n\n"
-        f"Deal ID: {format_deal_id(deal_id)}\n"
-        f"Action: {action_type.upper()}\n"
-        f"Buyer: @{buyer}\n\n"
-        f"Approve or Cancel below:"
-    )
-
-    keyboard = [[
-        InlineKeyboardButton("✅ Approve", callback_data=f"adm_ok_{deal_id}"),
-        InlineKeyboardButton("❌ Cancel", callback_data=f"adm_no_{deal_id}")
-    ]]
-
     await query.edit_message_text(
         f"✅ Buyer confirmed {action_type.upper()}\n\nWaiting admin approval..."
-    )
-
-    await context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text=admin_text,
-        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
@@ -293,9 +269,13 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     seller, buyer, amount, method, created_at = deal
 
-    duration = format_duration(created_at)
+    seconds = int(time.time() - created_at)
+    minutes = seconds // 60
+    hours = minutes // 60
+    minutes = minutes % 60
 
-    # ================= FIXED STATUS LOGIC =================
+    duration = f"{hours}h {minutes}m" if hours > 0 else f"{minutes}m"
+
     if action == "ok":
         cursor.execute("SELECT action_type FROM deals WHERE id=?", (deal_id,))
         row = cursor.fetchone()
@@ -310,7 +290,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         status = "CANCELLED"
 
-    # ================= SAVE HANDLED BY =================
     cursor.execute("""
     UPDATE deals SET handled_by=?
     WHERE id=?
@@ -330,9 +309,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await query.edit_message_text(text)
-
-    if PROOF_CHANNEL:
-        await context.bot.send_message(PROOF_CHANNEL, text)
 
 
 # ================= MAIN =================
