@@ -11,7 +11,6 @@ TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 PROOF_CHANNEL = os.getenv("PROOF_CHANNEL", "")
 
-
 # ================= DB =================
 conn = sqlite3.connect("escrow.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -35,6 +34,10 @@ conn.commit()
 
 
 # ================= HELPERS =================
+def clean_username(u: str):
+    return (u or "").replace("@", "").replace("seller:", "").replace("buyer:", "").strip().lower()
+
+
 def is_admin(user_id):
     return user_id == ADMIN_ID
 
@@ -51,10 +54,12 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /deal @seller @buyer amount method")
         return
 
-    seller = context.args[0].strip()
-    buyer = context.args[1].strip()
-    amount = context.args[2].replace("$", "").strip()
-    method = " ".join(context.args[3:]).strip()
+    seller = clean_username(context.args[0])
+    buyer = clean_username(context.args[1])
+
+    # 💰 IMPORTANT: preserve raw amount + currency exactly
+    amount = context.args[2]   # NO CLEANING → keeps 400$, 300 ETB, etc.
+    method = " ".join(context.args[3:])  # also raw
 
     cursor.execute("""
     INSERT INTO deals (
@@ -74,8 +79,8 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text(
         f"DEAL #{deal_id}\n"
-        f"Seller: {seller}\n"
-        f"Buyer: {buyer}\n"
+        f"Seller: @{seller}\n"
+        f"Buyer: @{buyer}\n"
         f"Amount: {amount}\n"
         f"Method: {method}\n\n"
         f"Waiting activation..."
@@ -116,8 +121,8 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"DEAL ACTIVATED #{deal_id}\n\n"
-        f"Seller: {seller}\n"
-        f"Buyer: {buyer}\n"
+        f"Seller: @{seller}\n"
+        f"Buyer: @{buyer}\n"
         f"Amount: {amount}\n"
         f"Method: {method}\n\n"
         f"Seller can now request actions"
@@ -150,9 +155,10 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
         await update.message.reply_text("Deal not active")
         return
 
-    sender = update.effective_user.username
+    sender = clean_username(update.effective_user.username)
 
-    if not sender or f"@{sender}".lower() != seller.lower():
+    # ✔ FIXED SELLER CHECK
+    if sender != seller:
         await update.message.reply_text("Only seller can do this")
         return
 
@@ -207,10 +213,11 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     buyer, action_type = deal
+    buyer = clean_username(buyer)
 
-    user = f"@{query.from_user.username}"
+    user = clean_username(query.from_user.username)
 
-    if not query.from_user.username or user.lower() != buyer.lower():
+    if user != buyer:
         await query.answer("Not buyer", show_alert=True)
         return
 
@@ -229,7 +236,7 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📌 ESCROW ADMIN REVIEW\n\n"
         f"Deal ID: {deal_id}\n"
         f"Action: {action_type.upper()}\n"
-        f"Buyer: {buyer}\n\n"
+        f"Buyer: @{buyer}\n\n"
         f"Approve or Cancel below:"
     )
 
@@ -242,7 +249,6 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ Buyer confirmed {action_type.upper()}\n\nWaiting admin approval..."
     )
 
-    # GROUP ADMIN PANEL (IMPORTANT FIX)
     await context.bot.send_message(
         chat_id=update.effective_chat.id,
         text=admin_text,
@@ -256,7 +262,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    # SECURITY CHECK
     if query.from_user.id != ADMIN_ID:
         await query.answer("Admin only", show_alert=True)
         return
@@ -277,15 +282,15 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     seller, buyer, amount, method = deal
 
-    final_status = "COMPLETED" if action == "ok" else "CANCELLED"
+    status = "COMPLETED" if action == "ok" else "CANCELLED"
 
     text = (
         f"📢 FINAL RESULT\n\n"
-        f"Seller: {seller}\n"
-        f"Buyer: {buyer}\n"
+        f"Seller: @{seller}\n"
+        f"Buyer: @{buyer}\n"
         f"Amount: {amount}\n"
         f"Method: {method}\n"
-        f"Status: {final_status}"
+        f"Status: {status}"
     )
 
     await query.edit_message_text(text)
