@@ -35,8 +35,6 @@ CREATE TABLE IF NOT EXISTS deals (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     seller_username TEXT,
     buyer_username TEXT,
-    seller_id INTEGER,
-    buyer_id INTEGER,
     amount TEXT,
     method TEXT,
     status TEXT,
@@ -189,7 +187,8 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn.commit()
 
-    await update.message.reply_text(
+    # ✅ FIXED ACTIVATED MESSAGE ID
+    msg = await update.message.reply_text(
         f"✅ DEAL ACTIVATED #{deal_id}\n\n"
         f"Seller: {seller}\n"
         f"Buyer: {buyer}\n"
@@ -200,6 +199,17 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/refund\n"
         f"/cancel"
     )
+
+    cursor.execute("""
+    UPDATE deals
+    SET deal_message_id=?
+    WHERE id=?
+    """, (
+        msg.message_id,
+        deal_id
+    ))
+
+    conn.commit()
 
 
 # =========================
@@ -308,6 +318,84 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = query.data
 
+    # =========================
+    # ADMIN CONFIRM
+    # =========================
+
+    if data.startswith("adminconfirm_"):
+
+        if not is_admin(query.from_user.id):
+            await query.answer(
+                "❌ Admin only",
+                show_alert=True
+            )
+            return
+
+        deal_id = int(data.split("_")[1])
+
+        cursor.execute("""
+        SELECT
+        seller_username,
+        buyer_username,
+        amount,
+        method,
+        handled_by,
+        status,
+        created_at,
+        completed_at
+        FROM deals
+        WHERE id=?
+        """, (deal_id,))
+
+        deal = cursor.fetchone()
+
+        if not deal:
+            return
+
+        (
+            seller,
+            buyer,
+            amount,
+            method,
+            handled_by,
+            status,
+            created_at,
+            completed_at
+        ) = deal
+
+        duration = format_duration(
+            completed_at - created_at
+        )
+
+        if status == "COMPLETED":
+            final_text = "✅ DEAL COMPLETED\n\n"
+        else:
+            final_text = "⚠️ DEAL CANCELLED\n\n"
+
+        final_text += (
+            f"Seller: {seller}\n"
+            f"Buyer: {buyer}\n"
+            f"Amount: {amount}\n"
+            f"Method: {method}\n"
+            f"Handled by: @{handled_by}\n\n"
+            f"⏱ Duration: {duration}\n\n"
+            f"Status: {status}"
+        )
+
+        await query.edit_message_text(final_text)
+
+        if PROOF_CHANNEL:
+            await context.bot.send_message(
+                chat_id=PROOF_CHANNEL,
+                text=final_text
+            )
+
+        return
+
+    # =========================
+    # BUYER ACCEPT/REJECT
+    # =========================
+
     parts = data.split("_")
 
     decision = parts[0]
@@ -336,9 +424,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     clicker = f"@{query.from_user.username}"
 
-    # =========================
     # ONLY BUYER CAN CLICK
-    # =========================
 
     if clicker.lower() != buyer.lower():
         await query.answer(
@@ -347,9 +433,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # =========================
     # REJECT
-    # =========================
 
     if decision == "reject":
 
@@ -359,9 +443,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
-    # =========================
     # ACCEPT
-    # =========================
 
     completed_time = time.time()
 
@@ -369,20 +451,15 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         completed_time - created_at
     )
 
-    status_text = ""
-
     if action == "release":
-        status_text = "✅ DEAL COMPLETED"
 
         final_status = "COMPLETED"
-
-    elif action in ["refund", "cancel"]:
-        status_text = "⚠️ DEAL CANCELLED"
-
-        final_status = "CANCELLED"
+        status_text = "✅ DEAL COMPLETED"
 
     else:
-        return
+
+        final_status = "CANCELLED"
+        status_text = "⚠️ DEAL CANCELLED"
 
     cursor.execute("""
     UPDATE deals
@@ -413,77 +490,23 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# ADMIN CONFIRM
+# MAIN
 # =========================
 
-async def admin_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+app = ApplicationBuilder().token(TOKEN).build()
 
-    query = update.callback_query
-    await query.answer()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("deal", deal))
+app.add_handler(CommandHandler("activate", activate))
+app.add_handler(CommandHandler("release", release))
+app.add_handler(CommandHandler("refund", refund))
+app.add_handler(CommandHandler("cancel", cancel))
 
-    data = query.data
+app.add_handler(CallbackQueryHandler(buttons))
 
-    if not data.startswith("adminconfirm_"):
-        return
+print("🚀 Escrow Bot v5 Fixed Running...")
 
-    if not is_admin(query.from_user.id):
-        await query.answer(
-            "❌ Admin only",
-            show_alert=True
-        )
-        return
-
-    deal_id = int(data.split("_")[1])
-
-    cursor.execute("""
-    SELECT
-    seller_username,
-    buyer_username,
-    amount,
-    method,
-    handled_by,
-    status,
-    created_at,
-    completed_at
-    FROM deals
-    WHERE id=?
-    """, (deal_id,))
-
-    deal = cursor.fetchone()
-
-    if not deal:
-        return
-
-    (
-        seller,
-        buyer,
-        amount,
-        method,
-        handled_by,
-        status,
-        created_at,
-        completed_at
-    ) = deal
-
-    duration = format_duration(
-        completed_at - created_at
-    )
-
-    if status == "COMPLETED":
-        final_text = (
-            f"✅ DEAL COMPLETED\n\n"
-        )
-    else:
-        final_text = (
-            f"⚠️ DEAL CANCELLED\n\n"
-        )
-
-    final_text += (
-        f"Seller: {seller}\n"
-        f"Buyer: {buyer}\n"
-        f"Amount: {amount}\n"
-        f"Method: {method}\n"
-        f"Handled by: @{handled_by}\n\n"
+app.run_polling()ndled by: @{handled_by}\n\n"
         f"⏱ Duration: {duration}\n\n"
         f"Status: {status}"
     )
