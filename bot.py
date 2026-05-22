@@ -11,6 +11,7 @@ TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 PROOF_CHANNEL = os.getenv("PROOF_CHANNEL", "")
 
+
 # ================= DB =================
 conn = sqlite3.connect("escrow.db", check_same_thread=False)
 cursor = conn.cursor()
@@ -50,8 +51,8 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /deal @seller @buyer amount method")
         return
 
-    seller = context.args[0].replace("seller:", "").strip()
-    buyer = context.args[1].replace("buyer:", "").strip()
+    seller = context.args[0].strip()
+    buyer = context.args[1].strip()
     amount = context.args[2].replace("$", "").strip()
     method = " ".join(context.args[3:]).strip()
 
@@ -224,13 +225,12 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn.commit()
 
-    # ================= ADMIN PANEL (FIXED) =================
     admin_text = (
-        f"📌 ADMIN APPROVAL REQUIRED\n\n"
+        f"📌 ESCROW ADMIN REVIEW\n\n"
         f"Deal ID: {deal_id}\n"
         f"Action: {action_type.upper()}\n"
         f"Buyer: {buyer}\n\n"
-        f"Approve or Cancel this deal:"
+        f"Approve or Cancel below:"
     )
 
     keyboard = [[
@@ -238,14 +238,13 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         InlineKeyboardButton("❌ Cancel", callback_data=f"adm_no_{deal_id}")
     ]]
 
-    # show buyer confirmation
     await query.edit_message_text(
         f"✅ Buyer confirmed {action_type.upper()}\n\nWaiting admin approval..."
     )
 
-    # send admin panel
+    # GROUP ADMIN PANEL (IMPORTANT FIX)
     await context.bot.send_message(
-        chat_id=ADMIN_ID,
+        chat_id=update.effective_chat.id,
         text=admin_text,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -257,7 +256,8 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if not is_admin(query.from_user.id):
+    # SECURITY CHECK
+    if query.from_user.id != ADMIN_ID:
         await query.answer("Admin only", show_alert=True)
         return
 
