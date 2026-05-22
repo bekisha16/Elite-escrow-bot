@@ -36,6 +36,10 @@ conn.commit()
 
 
 # ================= HELPERS =================
+def clean_username(u: str):
+    return (u or "").replace("@", "").replace("seller:", "").replace("buyer:", "").strip().lower()
+
+
 def format_deal_id(deal_id: int):
     return f"#{deal_id:03d}"
 
@@ -63,8 +67,8 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /deal @seller @buyer amount method")
         return
 
-    seller = context.args[0].replace("@", "")
-    buyer = context.args[1].replace("@", "")
+    seller = clean_username(context.args[0])
+    buyer = clean_username(context.args[1])
 
     amount = context.args[2]
     method = " ".join(context.args[3:])
@@ -85,29 +89,19 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     deal_id = cursor.lastrowid
 
-    # ================= GROUP MESSAGE =================
+    # ================= ADMIN NOTIFICATION =================
     await update.message.reply_text(
         f"🚨 NEW ESCROW DEAL 🚨\n\n"
         f"🆔 DEAL {format_deal_id(deal_id)}\n"
-        f"👤 Seller: {seller}\n"
-        f"👤 Buyer: {buyer}\n"
+        f"👤 Seller: @{seller}\n"
+        f"👤 Buyer: @{buyer}\n"
         f"💰 Amount: {amount}\n"
         f"💳 Method: {method}\n\n"
-        f"👮 Admin has been notified"
+        f"👮 Admin please activate using /activate"
     )
 
-    # ================= ADMIN DM (ONLY HERE) =================
-    await context.bot.send_message(
-        chat_id=ADMIN_ID,
-        text=(
-            f"🚨 NEW ESCROW DEAL 🚨\n\n"
-            f"🆔 DEAL {format_deal_id(deal_id)}\n"
-            f"👤 Seller: {seller}\n"
-            f"👤 Buyer: {buyer}\n"
-            f"💰 Amount: {amount}\n"
-            f"💳 Method: {method}\n\n"
-            f"👉 Please activate this deal in the group"
-        )
+    await update.message.reply_text(
+        f"🔔 Admin Alert: New deal {format_deal_id(deal_id)} needs activation"
     )
 
 
@@ -138,8 +132,8 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"DEAL ACTIVATED {format_deal_id(deal_id)}\n\n"
-        f"Seller: {seller}\n"
-        f"Buyer: {buyer}\n"
+        f"Seller: @{seller}\n"
+        f"Buyer: @{buyer}\n"
         f"Amount: {amount}\n"
         f"Method: {method}\n\n"
         f"Ready for escrow actions"
@@ -172,10 +166,9 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
         await update.message.reply_text("Deal not active")
         return
 
-    sender = update.effective_user.username or ""
-    sender = sender.replace("@", "").lower()
+    sender = clean_username(update.effective_user.username)
 
-    if sender != seller.lower():
+    if sender != seller:
         await update.message.reply_text("Only seller can do this")
         return
 
@@ -186,14 +179,15 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
 
     conn.commit()
 
-    # ================= GROUP BUYER NOTIFICATION =================
-    await update.message.reply_text(
-        f"⚠️ ESCROW ACTION REQUEST ⚠️\n\n"
-        f"🆔 Deal {format_deal_id(deal_id)}\n"
-        f"👤 Seller: {seller}\n"
-        f"👤 Buyer: {buyer}\n"
-        f"📌 Action: {action.upper()}\n\n"
-        f"👉 Buyer please respond below"
+    # ================= BUYER NOTIFICATION =================
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=(
+            f"⚠️ ESCROW ACTION REQUEST ⚠️\n\n"
+            f"🆔 Deal {format_deal_id(deal_id)}\n"
+            f"👤 Seller @{seller} requested: {action.upper()}\n\n"
+            f"👉 Buyer please respond using buttons"
+        )
     )
 
     keyboard = [[
@@ -202,7 +196,7 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
     ]]
 
     await update.message.reply_text(
-        "Waiting buyer response...",
+        f"Waiting buyer confirmation...",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -240,9 +234,11 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     buyer, action_type = deal
-    user = (query.from_user.username or "").replace("@", "").lower()
+    buyer = clean_username(buyer)
 
-    if user != buyer.lower():
+    user = clean_username(query.from_user.username)
+
+    if user != buyer:
         await query.answer("Not buyer", show_alert=True)
         return
 
@@ -257,8 +253,27 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn.commit()
 
+    admin_text = (
+        f"📌 ESCROW ADMIN REVIEW\n\n"
+        f"Deal ID: {format_deal_id(deal_id)}\n"
+        f"Action: {action_type.upper()}\n"
+        f"Buyer: @{buyer}\n\n"
+        f"Approve or Cancel"
+    )
+
+    keyboard = [[
+        InlineKeyboardButton("✅ Approve", callback_data=f"adm_ok_{deal_id}"),
+        InlineKeyboardButton("❌ Cancel", callback_data=f"adm_no_{deal_id}")
+    ]]
+
     await query.edit_message_text(
-        f"✅ Buyer confirmed {action_type.upper()}\n\nWaiting admin approval..."
+        f"Buyer confirmed. Waiting admin..."
+    )
+
+    await context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text=admin_text,
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
@@ -313,8 +328,8 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         f"📢 FINAL RESULT\n\n"
         f"🆔 Deal ID: {format_deal_id(deal_id)}\n"
-        f"👤 Seller: {seller}\n"
-        f"👤 Buyer: {buyer}\n"
+        f"👤 Seller: @{seller}\n"
+        f"👤 Buyer: @{buyer}\n"
         f"💰 Amount: {amount}\n"
         f"💳 Method: {method}\n"
         f"⏱ Duration: {duration}\n"
@@ -323,9 +338,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await query.edit_message_text(text)
-
-    if PROOF_CHANNEL:
-        await context.bot.send_message(PROOF_CHANNEL, text)
 
 
 # ================= MAIN =================
