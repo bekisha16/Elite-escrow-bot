@@ -8,10 +8,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # ================= LOGGING =================
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+logging.basicConfig(level=logging.INFO)
 
 # ================= CONFIG =================
 TOKEN = os.getenv("BOT_TOKEN")
@@ -21,8 +18,11 @@ if not TOKEN:
 
 ADMIN_IDS = [6138132255, 5635739078]
 
-# ================= REMOVE WEBHOOK (CRITICAL) =================
-requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook")
+# ================= SAFE WEBHOOK REMOVE =================
+try:
+    requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook")
+except:
+    pass
 
 # ================= DB =================
 conn = sqlite3.connect("escrow.db", check_same_thread=False)
@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS deals (
     action TEXT,
     msg_id INTEGER,
     created REAL,
-    handled_by TEXT
+    handled_by_id INTEGER,
+    handled_by_username TEXT
 )
 """)
 
@@ -51,6 +52,9 @@ def deal_id(i):
 
 def clean(u):
     return (u or "").replace("@", "").strip().lower()
+
+def get_username(user):
+    return user.username if user.username else f"id:{user.id}"
 
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -77,7 +81,7 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     did = cursor.lastrowid
 
     msg = await update.message.reply_text(
-        f"NEW DEAL {deal_id(did)}\n"
+        f"🚨 NEW DEAL {deal_id(did)}\n"
         f"Seller: @{seller}\n"
         f"Buyer: @{buyer}\n"
         f"Amount: {amount}\n"
@@ -106,7 +110,17 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     did = row[0]
 
-    cursor.execute("UPDATE deals SET status=? WHERE id=?", ("ACTIVE", did))
+    cursor.execute("""
+    UPDATE deals
+    SET status=?, handled_by_id=?, handled_by_username=?
+    WHERE id=?
+    """, (
+        "ACTIVE",
+        update.effective_user.id,
+        get_username(update.effective_user),
+        did
+    ))
+
     conn.commit()
 
     await update.message.reply_text(f"Activated {deal_id(did)}")
@@ -180,12 +194,68 @@ async def buyer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "rej":
         return await q.edit_message_text("Rejected")
 
-    cursor.execute("UPDATE deals SET status=? WHERE id=?", (act.upper()+"_CONFIRMED", did))
+    cursor.execute("""
+    UPDATE deals SET status=?
+    WHERE id=?
+    """, (act.upper() + "_CONFIRMED", did))
+
     conn.commit()
 
     await q.edit_message_text("Confirmed")
 
-# ================= MAIN (SAFE RAILWAY START) =================
+# ================= LEADERBOARD (FIXED) =================
+async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.effective_user.id not in ADMIN_IDS:
+        return await update.message.reply_text("Admin only")
+
+    cursor.execute("""
+    SELECT handled_by_username, status
+    FROM deals
+    WHERE handled_by_username IS NOT NULL
+    """)
+
+    rows = cursor.fetchall()
+
+    stats = {}
+
+    for admin, status in rows:
+
+        if not admin:
+            continue
+
+        name = f"@{admin}" if not admin.startswith("id:") else admin
+
+        if name not in stats:
+            stats[name] = {"total":0,"completed":0,"refunded":0,"cancelled":0}
+
+        stats[name]["total"] += 1
+
+        if status == "COMPLETED":
+            stats[name]["completed"] += 1
+        elif status == "REFUNDED":
+            stats[name]["refunded"] += 1
+        elif status == "CANCELLED":
+            stats[name]["cancelled"] += 1
+
+    sorted_stats = sorted(stats.items(), key=lambda x: x[1]["total"], reverse=True)
+
+    text = "🏆 ADMIN LEADERBOARD\n\n"
+
+    i = 1
+    for admin, d in sorted_stats:
+        text += (
+            f"{i}. {admin}\n"
+            f"📦 Total: {d['total']}\n"
+            f"✅ Completed: {d['completed']}\n"
+            f"💸 Refunded: {d['refunded']}\n"
+            f"❌ Cancelled: {d['cancelled']}\n\n"
+        )
+        i += 1
+
+    await update.message.reply_text(text)
+
+# ================= MAIN =================
 def main():
 
     app = Application.builder().token(TOKEN).build()
@@ -198,6 +268,7 @@ def main():
     app.add_handler(CommandHandler("refund", refund))
     app.add_handler(CommandHandler("cancel", cancel))
 
+    app.add_handler(CommandHandler("leaderboard", leaderboard))
     app.add_handler(CallbackQueryHandler(buyer, pattern="^(acc|rej)_"))
 
     print("Bot running...")
