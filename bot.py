@@ -73,7 +73,7 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     seller = clean_username(context.args[0])
     buyer = clean_username(context.args[1])
 
-    amount = context.args[2]          # keep currency EXACT
+    amount = context.args[2]          # keep currency exactly
     method = " ".join(context.args[3:])
 
     cursor.execute("""
@@ -236,11 +236,6 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     cursor.execute("""
-    SELECT created_at FROM deals WHERE id=?
-    """, (deal_id,))
-    created_at = cursor.fetchone()[0]
-
-    cursor.execute("""
     UPDATE deals SET buyer_confirmed=1, status=?
     WHERE id=?
     """, (f"{action_type.upper()}_CONFIRMED", deal_id))
@@ -299,7 +294,20 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     duration = format_duration(created_at)
 
-    status = "COMPLETED" if action == "ok" else "CANCELLED"
+    # ================= FIXED STATUS LOGIC =================
+    if action == "ok":
+        cursor.execute("SELECT action_type FROM deals WHERE id=?", (deal_id,))
+        row = cursor.fetchone()
+        action_type = row[0] if row else "release"
+
+        if action_type == "refund":
+            status = "REFUNDED"
+        elif action_type == "cancel":
+            status = "CANCELLED"
+        else:
+            status = "COMPLETED"
+    else:
+        status = "CANCELLED"
 
     text = (
         f"📢 FINAL RESULT\n\n"
