@@ -154,17 +154,58 @@ def is_admin(user_id: int):
 
 # ---------------- START ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+import os
+import sqlite3
+import time
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+
+# ---------------- ENV ----------------
+TOKEN = os.getenv("BOT_TOKEN")
+PROOF_CHANNEL = os.getenv("PROOF_CHANNEL", "")
+
+ADMIN_IDS = [
+    int(x)
+    for x in os.getenv("ADMIN_IDS", "").split(",")
+    if x.strip()
+]
+
+# ---------------- DB ----------------
+conn = sqlite3.connect("escrow.db", check_same_thread=False)
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS deals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    buyer INTEGER,
+    seller INTEGER,
+    amount TEXT,
+    status TEXT,
+    created_at REAL
+)
+""")
+conn.commit()
+
+# ---------------- ADMIN CHECK ----------------
+def is_admin(user_id: int):
+    return user_id in ADMIN_IDS
+
+
+# ---------------- START ----------------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Elite Escrow Bot v4\n\n"
+        "👋 Escrow Bot v4 Ready\n\n"
         "Commands:\n"
-        "/deal <amount>"
+        "/deal <amount>\n"
+        "/release <id>\n"
+        "/cancel <id>"
     )
 
 
 # ---------------- DEAL ----------------
 async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Usage: /deal <amount>")
+        await update.message.reply_text("❌ Usage: /deal <amount>")
         return
 
     amount = context.args[0]
@@ -189,13 +230,18 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# ---------------- BUTTON HANDLER ----------------
+# ---------------- BUTTONS ----------------
 async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     data = query.data
-    deal_id = int(data.split("_")[-1])
+
+    try:
+        deal_id = int(data.split("_")[-1])
+    except:
+        await query.answer("Error", show_alert=True)
+        return
 
     cursor.execute("SELECT buyer, seller, amount FROM deals WHERE id=?", (deal_id,))
     deal = cursor.fetchone()
@@ -235,7 +281,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-    # ---------------- ADMIN APPROVE RELEASE ----------------
+    # ---------------- APPROVE RELEASE ----------------
     elif data.startswith("appr_release_"):
 
         if not is_admin(query.from_user.id):
@@ -253,7 +299,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id=PROOF_CHANNEL, text=msg)
 
 
-    # ---------------- ADMIN APPROVE CANCEL ----------------
+    # ---------------- APPROVE CANCEL ----------------
     elif data.startswith("appr_cancel_"):
 
         if not is_admin(query.from_user.id):
@@ -274,7 +320,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ---------------- REJECT ----------------
     elif data.startswith("reject_"):
         if is_admin(query.from_user.id):
-            await query.edit_message_text("❌ Request rejected by admin")
+            await query.edit_message_text("❌ Request rejected")
         else:
             await query.answer("❌ Not allowed", show_alert=True)
 
@@ -286,6 +332,6 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("deal", deal))
 app.add_handler(CallbackQueryHandler(buttons))
 
-print("🚀 Escrow Bot v4 (Multi-Admin) Running...")
+print("🚀 Escrow Bot v4 FIXED Running...")
 
 app.run_polling()
