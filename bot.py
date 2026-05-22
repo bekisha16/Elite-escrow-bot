@@ -13,12 +13,11 @@ from telegram.ext import (
 # ================= CONFIG =================
 TOKEN = os.getenv("BOT_TOKEN")
 
-ADMIN_IDS = list(
-    map(
-        int,
-        os.getenv("ADMIN_IDS", "").split(",")
-    )
-)
+# MULTI ADMINS
+ADMIN_IDS = [
+    6138132255,
+    5635739078
+]
 
 PROOF_CHANNEL = os.getenv("PROOF_CHANNEL", "")
 
@@ -466,26 +465,6 @@ app.add_handler(CommandHandler("start", start))
 
 app.add_handler(CommandHandler("deal", deal))
 app.add_handler(CommandHandler("activate", activate))
-
-app.add_handler(CommandHandler("release", release))
-app.add_handler(CommandHandler("refund", refund))
-app.add_handler(CommandHandler("cancel", cancel))
-
-app.add_handler(
-    CallbackQueryHandler(
-        buyer_buttons,
-        pattern="^(acc|rej)_"
-    )
-)
-
-app.add_handler(
-    CallbackQueryHandler(
-        admin_buttons,
-        pattern="^adm_"
-    )
-)
-
-app.run_polling()dler(CommandHandler("activate", activate))
 
 app.add_handler(CommandHandler("release", release))
 app.add_handler(CommandHandler("refund", refund))
