@@ -12,16 +12,12 @@ from telegram.ext import (
 
 # ================= CONFIG =================
 TOKEN = os.getenv("BOT_TOKEN")
+PROOF_CHANNEL = os.getenv("PROOF_CHANNEL")
 
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN missing")
 
-ADMIN_IDS = [
-    6138132255,
-    5635739078
-]
-
-PROOF_CHANNEL = os.getenv("PROOF_CHANNEL", "")
+ADMIN_IDS = [6138132255, 5635739078]
 
 # ================= DB =================
 conn = sqlite3.connect("escrow.db", check_same_thread=False)
@@ -111,7 +107,11 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg_id = update.message.reply_to_message.message_id
 
-    cursor.execute("SELECT id, seller_username, buyer_username, amount, method FROM deals WHERE deal_message_id=?", (msg_id,))
+    cursor.execute("""
+    SELECT id, seller_username, buyer_username, amount, method
+    FROM deals WHERE deal_message_id=?
+    """, (msg_id,))
+
     row = cursor.fetchone()
 
     if not row:
@@ -121,8 +121,7 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cursor.execute("""
     UPDATE deals
-    SET status=?,
-        activator_admin_id=?
+    SET status=?, activator_admin_id=?
     WHERE id=?
     """, ("ACTIVE", update.effective_user.id, did))
 
@@ -201,7 +200,11 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action, did = q.data.split("_")
     did = int(did)
 
-    cursor.execute("SELECT buyer_username, action_type FROM deals WHERE id=?", (did,))
+    cursor.execute("""
+    SELECT buyer_username, action_type
+    FROM deals WHERE id=?
+    """, (did,))
+
     row = cursor.fetchone()
 
     if not row:
@@ -219,12 +222,13 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await q.edit_message_text("❌ Rejected")
 
     cursor.execute("""
-    UPDATE deals SET buyer_confirmed=1, status=? WHERE id=?
+    UPDATE deals SET buyer_confirmed=1, status=?
+    WHERE id=?
     """, (f"{action_type.upper()}_CONFIRMED", did))
 
     conn.commit()
 
-    await q.edit_message_text("✅ Buyer confirmed. Waiting admin...")
+    await q.edit_message_text("Buyer confirmed. Waiting admin...")
 
     keyboard = [[
         InlineKeyboardButton("✅ Approve", callback_data=f"adm_ok_{did}"),
@@ -243,7 +247,7 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    action, status, did = q.data.split("_")
+    _, status, did = q.data.split("_")
     did = int(did)
 
     cursor.execute("""
@@ -258,7 +262,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     admin_id, seller, buyer, amount, method, created, action_type = row
 
-    # LOCKED ADMIN RULE
     if q.from_user.id != admin_id:
         return await q.answer("Only activating admin", show_alert=True)
 
@@ -278,11 +281,29 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn.commit()
 
-    await q.edit_message_text(
-        f"📢 FINAL RESULT\n"
-        f"Deal {deal_id(did)}\n"
-        f"Status: {final}"
+    text = (
+        f"📢 FINAL RESULT\n\n"
+        f"🆔 Deal ID: {deal_id(did)}\n"
+        f"👤 Seller: @{seller}\n"
+        f"👤 Buyer: @{buyer}\n"
+        f"💰 Amount: {amount}\n"
+        f"💳 Method: {method}\n"
+        f"⏱ Duration: {duration(created)}\n"
+        f"👮 Handled by: @{safe_user(q.from_user)}\n"
+        f"📌 Status: {final}"
     )
+
+    await q.edit_message_text(text)
+
+    # ================= CHANNEL POST =================
+    if PROOF_CHANNEL:
+        try:
+            await context.bot.send_message(
+                chat_id=PROOF_CHANNEL,
+                text=text
+            )
+        except Exception as e:
+            print("Channel post error:", e)
 
 # ================= MAIN =================
 app = ApplicationBuilder().token(TOKEN).build()
