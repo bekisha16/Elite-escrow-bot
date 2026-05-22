@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import time
+import logging
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -10,6 +11,12 @@ from telegram.ext import (
     ContextTypes
 )
 
+# ================= LOGGING =================
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+
 # ================= CONFIG =================
 TOKEN = os.getenv("BOT_TOKEN")
 PROOF_CHANNEL = os.getenv("PROOF_CHANNEL")
@@ -17,7 +24,7 @@ PROOF_CHANNEL = os.getenv("PROOF_CHANNEL")
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN missing")
 
-# Put ALL admin IDs here (safe list system)
+# 👉 ADD YOUR ADMIN IDS HERE
 ADMIN_IDS = [6138132255, 5635739078]
 
 # ================= DB =================
@@ -48,7 +55,6 @@ def deal_id(did):
     return f"#{did:03d}"
 
 def admin_tag(user):
-    """Always safe admin format"""
     if user.username:
         return f"@{user.username}"
     return f"id:{user.id}"
@@ -65,7 +71,7 @@ def duration(start):
 
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Escrow Bot Running ✅")
+    await update.message.reply_text("✅ Escrow Bot is Running")
 
 # ================= DEAL =================
 async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -106,7 +112,7 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("❌ Admin only")
 
     if not update.message.reply_to_message:
-        return await update.message.reply_text("Reply to deal")
+        return await update.message.reply_text("Reply to deal message")
 
     msg_id = update.message.reply_to_message.message_id
 
@@ -197,7 +203,11 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
-    action, did = q.data.split("_")
+    parts = q.data.split("_")
+    if len(parts) != 2:
+        return
+
+    action, did = parts
     did = int(did)
 
     cursor.execute("""
@@ -206,13 +216,12 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """, (did,))
 
     row = cursor.fetchone()
-
     if not row:
         return
 
     buyer, action_type = row
-
     buyer = clean_username(buyer)
+
     user = clean_username(q.from_user.username)
 
     if user != buyer:
@@ -248,7 +257,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
 
     parts = q.data.split("_")
-
     if len(parts) != 3:
         return
 
@@ -261,7 +269,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """, (did,))
 
     row = cursor.fetchone()
-
     if not row:
         return
 
@@ -300,43 +307,13 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await q.edit_message_text(text)
 
-# ================= STATUS =================
-async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    admin = admin_tag(update.effective_user)
-
-    cursor.execute("""
-    SELECT status FROM deals WHERE handled_by=?
-    """, (admin,))
-
-    rows = cursor.fetchall()
-
-    if not rows:
-        return await update.message.reply_text("No deals handled by you")
-
-    total = len(rows)
-
-    completed = sum(1 for r in rows if r[0] == "COMPLETED")
-    refunded = sum(1 for r in rows if r[0] == "REFUNDED")
-    cancelled = sum(1 for r in rows if r[0] == "CANCELLED")
-
-    await update.message.reply_text(
-        f"👤 YOUR STATUS\n\n"
-        f"Total: {total}\n"
-        f"Completed: {completed}\n"
-        f"Refunded: {refunded}\n"
-        f"Cancelled: {cancelled}\n"
-    )
-
 # ================= LEADERBOARD =================
 async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.effective_user.id not in ADMIN_IDS:
         return await update.message.reply_text("❌ Admin only")
 
-    cursor.execute("""
-    SELECT handled_by, status FROM deals WHERE handled_by IS NOT NULL
-    """)
+    cursor.execute("SELECT handled_by, status FROM deals WHERE handled_by IS NOT NULL")
     rows = cursor.fetchall()
 
     stats = {}
@@ -373,6 +350,34 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📦 Total: {d['total']}\n"
             f"✅ Completed: {d['completed']}\n"
             f"💸 Refunded: {d['refunded']}\n"
+            f"❌ Cancelled: {d['cancelled']}\n\n"
+        )
+        rank += 1
+
+    await update.message.reply_text(text)
+
+# ================= MAIN =================
+def main():
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("deal", deal))
+    app.add_handler(CommandHandler("activate", activate))
+
+    app.add_handler(CommandHandler("release", release))
+    app.add_handler(CommandHandler("refund", refund))
+    app.add_handler(CommandHandler("cancel", cancel))
+
+    app.add_handler(CommandHandler("leaderboard", leaderboard))
+
+    app.add_handler(CallbackQueryHandler(buyer_buttons, pattern="^(acc|rej)_"))
+    app.add_handler(CallbackQueryHandler(admin_buttons, pattern="^adm_"))
+
+    print("Bot is running...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()           f"💸 Refunded: {d['refunded']}\n"
             f"❌ Cancelled: {d['cancelled']}\n\n"
         )
         rank += 1
