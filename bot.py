@@ -47,6 +47,13 @@ conn.commit()
 def clean_username(u):
     return (u or "").replace("@", "").replace("seller:", "").replace("buyer:", "").strip().lower()
 
+# 🔥 FIX: clean amount/method formatting
+def clean_field(value):
+    v = (value or "").strip()
+    v = v.replace("amount:", "").replace("Amount:", "")
+    v = v.replace("method:", "").replace("Method:", "")
+    return v.strip()
+
 def safe_user(user):
     return (user.username or str(user.id)).lower()
 
@@ -72,8 +79,10 @@ async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     seller = clean_username(context.args[0])
     buyer = clean_username(context.args[1])
-    amount = context.args[2]
-    method = " ".join(context.args[3:])
+
+    # ✅ CLEAN FIX APPLIED HERE
+    amount = clean_field(context.args[2])
+    method = clean_field(" ".join(context.args[3:]))
 
     cursor.execute("""
     INSERT INTO deals (seller_username, buyer_username, amount, method, status, created_at)
@@ -178,7 +187,7 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
     ]]
 
     await update.message.reply_text(
-        f"⚠ Seller requested: {action.upper()}\nBuyer confirm:",
+        f"⚠ Seller requested: {action.upper()}",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -295,7 +304,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await q.edit_message_text(text)
 
-    # ================= CHANNEL POST =================
     if PROOF_CHANNEL:
         try:
             await context.bot.send_message(
