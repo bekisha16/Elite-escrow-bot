@@ -1,6 +1,8 @@
 import os
 import sqlite3
 import time
+import logging
+import requests
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -10,6 +12,9 @@ from telegram.ext import (
     ContextTypes
 )
 
+# ================= LOGGING =================
+logging.basicConfig(level=logging.INFO)
+
 # ================= CONFIG =================
 TOKEN = os.getenv("BOT_TOKEN")
 PROOF_CHANNEL = os.getenv("PROOF_CHANNEL")
@@ -18,6 +23,12 @@ if not TOKEN:
     raise RuntimeError("BOT_TOKEN missing")
 
 ADMIN_IDS = [6138132255, 5635739078]
+
+# ================= REMOVE WEBHOOK (CRITICAL FIX) =================
+try:
+    requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook")
+except:
+    pass
 
 # ================= DB =================
 conn = sqlite3.connect("escrow.db", check_same_thread=False)
@@ -47,9 +58,7 @@ def deal_id(did):
     return f"#{did:03d}"
 
 def admin_tag(user):
-    if user.username:
-        return f"@{user.username}"
-    return f"id:{user.id}"
+    return f"@{user.username}" if user.username else f"id:{user.id}"
 
 def clean_username(u):
     return (u or "").replace("@", "").strip().lower()
@@ -63,7 +72,7 @@ def duration(start):
 
 # ================= START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Escrow Bot Running ✅")
+    await update.message.reply_text("✅ Escrow Bot Online")
 
 # ================= DEAL =================
 async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -203,7 +212,6 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """, (did,))
 
     row = cursor.fetchone()
-
     if not row:
         return
 
@@ -234,7 +242,7 @@ async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_message(
         chat_id=q.message.chat_id,
-        text=f"📌 Admin review needed for {deal_id(did)}",
+        text=f"📌 Admin approval needed for {deal_id(did)}",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -257,7 +265,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """, (did,))
 
     row = cursor.fetchone()
-
     if not row:
         return
 
@@ -302,9 +309,7 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return await update.message.reply_text("❌ Admin only")
 
-    cursor.execute("""
-    SELECT handled_by, status FROM deals WHERE handled_by IS NOT NULL
-    """)
+    cursor.execute("SELECT handled_by, status FROM deals WHERE handled_by IS NOT NULL")
     rows = cursor.fetchall()
 
     stats = {}
@@ -366,6 +371,8 @@ def main():
     print("Bot running...")
     app.run_polling()
 
+if __name__ == "__main__":
+    main()
 if __name__ == "__main__":
     main()add_handler(CommandHandler("leaderboard", leaderboard))
 
