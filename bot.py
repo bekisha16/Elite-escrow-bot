@@ -24,7 +24,7 @@ PROOF_CHANNEL = os.getenv("PROOF_CHANNEL")
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN missing")
 
-ADMIN_IDS = [6138132255, 5635739078, 8216037421]
+ADMIN_IDS = [6138132255, 5635739078]
 
 # ================= DB =================
 conn = sqlite3.connect("escrow.db", check_same_thread=False)
@@ -74,7 +74,7 @@ def duration(start):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Escrow Bot Running ✅")
 
-# ================= FORM DEAL =================
+# ================= FORM CREATION =================
 async def deal_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
@@ -162,7 +162,113 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Method: {method}"
     )
 
-# ================= ADMIN FINAL =================
+# ================= SELLER ACTION (FIXED) =================
+async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, action):
+
+    if not update.message.reply_to_message:
+        return await update.message.reply_text("Reply to deal")
+
+    msg_id = update.message.reply_to_message.message_id
+
+    cursor.execute("""
+    SELECT id, seller_username, buyer_username, status, action_locked
+    FROM deals WHERE deal_message_id=?
+    """, (msg_id,))
+
+    row = cursor.fetchone()
+
+    if not row:
+        return await update.message.reply_text("Not found")
+
+    did, seller, buyer, status, locked = row
+
+    if status != "ACTIVE":
+        return await update.message.reply_text("Not active")
+
+    if locked == 1:
+        return await update.message.reply_text("Already processed")
+
+    sender = clean_username(safe_user(update.effective_user))
+
+    if sender != seller:
+        return await update.message.reply_text("Only seller can do this")
+
+    cursor.execute("""
+    UPDATE deals SET action_type=?, action_locked=1 WHERE id=?
+    """, (action, did))
+
+    conn.commit()
+
+    keyboard = [[
+        InlineKeyboardButton("✅ Accept", callback_data=f"acc_{did}"),
+        InlineKeyboardButton("❌ Reject", callback_data=f"rej_{did}")
+    ]]
+
+    await update.message.reply_text(
+        f"⚠ Seller requested: {action.upper()}",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def release(update, context):
+    await seller_action(update, context, "release")
+
+async def refund(update, context):
+    await seller_action(update, context, "refund")
+
+async def cancel(update, context):
+    await seller_action(update, context, "cancel")
+
+# ================= BUYER =================
+async def buyer_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    q = update.callback_query
+    await q.answer()
+
+    action, did = q.data.split("_")
+    did = int(did)
+
+    cursor.execute("""
+    SELECT buyer_username, action_type
+    FROM deals WHERE id=?
+    """, (did,))
+
+    row = cursor.fetchone()
+
+    if not row:
+        return
+
+    buyer, action_type = row
+
+    buyer = clean_username(buyer)
+    user = clean_username(safe_user(q.from_user))
+
+    if user != buyer:
+        return await q.answer("Not buyer", show_alert=True)
+
+    if action == "rej":
+        return await q.edit_message_text("❌ Rejected")
+
+    cursor.execute("""
+    UPDATE deals SET buyer_confirmed=1, status=?
+    WHERE id=?
+    """, (f"{action_type.upper()}_CONFIRMED", did))
+
+    conn.commit()
+
+    await q.edit_message_text("Buyer confirmed. Waiting admin...")
+
+    keyboard = [[
+        InlineKeyboardButton("✅ Approve", callback_data=f"adm_ok_{did}"),
+        InlineKeyboardButton("❌ Cancel", callback_data=f"adm_no_{did}")
+    ]]
+
+    await context.bot.send_message(
+        chat_id=q.message.chat_id,
+        text=f"📌 Admin review needed for {deal_id(did)}",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+# ================= ADMIN =================
 async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     q = update.callback_query
@@ -216,7 +322,7 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await q.edit_message_text(text)
 
-    # ================= FIXED PROOF CHANNEL =================
+    # ================= PROOF CHANNEL =================
     if PROOF_CHANNEL:
         try:
             await context.bot.send_message(
@@ -225,7 +331,7 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             logger.info("Proof sent successfully")
         except Exception as e:
-            logger.error(f"Proof channel failed: {e}")
+            logger.error(f"Proof channel error: {e}")
 
 # ================= STATS =================
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -252,7 +358,13 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("activate", activate))
 app.add_handler(CommandHandler("stats", stats))
 
+app.add_handler(CommandHandler("release", release))
+app.add_handler(CommandHandler("refund", refund))
+app.add_handler(CommandHandler("cancel", cancel))
+
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, deal_form))
+
+app.add_handler(CallbackQueryHandler(buyer_buttons, pattern="^(acc|rej)_"))
 app.add_handler(CallbackQueryHandler(admin_buttons, pattern="^adm_"))
 
 app.run_polling()
