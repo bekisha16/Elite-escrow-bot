@@ -441,7 +441,7 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💰 Amount: {amount}\n"
         f"💳 Method: {method}\n"
         f"⏱ Duration: {duration(created)}\n\n"
-        f"🟢 Activated by: {admin_mention}\n"
+        f"🟢 Handled by: {admin_mention}\n"
         f"📌 Status: {final}"
     )
 
