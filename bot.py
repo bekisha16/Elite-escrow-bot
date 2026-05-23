@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import time
+import logging
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -12,6 +13,10 @@ from telegram.ext import (
     filters
 )
 
+# ================= LOGGING =================
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # ================= CONFIG =================
 TOKEN = os.getenv("BOT_TOKEN")
 PROOF_CHANNEL = os.getenv("PROOF_CHANNEL")
@@ -19,7 +24,7 @@ PROOF_CHANNEL = os.getenv("PROOF_CHANNEL")
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN missing")
 
-ADMIN_IDS = [6138132255, 5635739078, 8216037421]
+ADMIN_IDS = [6138132255, 5635739078]
 
 # ================= DB =================
 conn = sqlite3.connect("escrow.db", check_same_thread=False)
@@ -69,12 +74,11 @@ def duration(start):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Escrow Bot Running ✅")
 
-# ================= FORM DEAL CREATION =================
+# ================= FORM CREATION =================
 async def deal_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
 
-    # must contain escrow form
     if "buyer:" not in text.lower() or "seller:" not in text.lower():
         return
 
@@ -93,7 +97,7 @@ async def deal_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
         method = clean_field(data.get("method"))
 
         if not seller or not buyer or not amount or not method:
-            return await update.message.reply_text("❌ Invalid escrow form format")
+            return await update.message.reply_text("❌ Invalid escrow form")
 
         cursor.execute("""
         INSERT INTO deals (seller_username, buyer_username, amount, method, status, created_at)
@@ -116,8 +120,9 @@ async def deal_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("UPDATE deals SET deal_message_id=? WHERE id=?", (msg.message_id, did))
         conn.commit()
 
-    except Exception:
-        await update.message.reply_text("❌ Error processing escrow form")
+    except Exception as e:
+        logger.error(f"Form error: {e}")
+        await update.message.reply_text("❌ Error processing form")
 
 # ================= ACTIVATE =================
 async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -131,7 +136,7 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_id = update.message.reply_to_message.message_id
 
     cursor.execute("""
-    SELECT id, seller_username, buyer_username, amount, method
+    SELECT id, seller_username, buyer_username, amount, method, created_at
     FROM deals WHERE deal_message_id=?
     """, (msg_id,))
 
@@ -140,11 +145,10 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not row:
         return await update.message.reply_text("Deal not found")
 
-    did, seller, buyer, amount, method = row
+    did, seller, buyer, amount, method, created = row
 
     cursor.execute("""
-    UPDATE deals
-    SET status=?, activator_admin_id=?
+    UPDATE deals SET status=?, activator_admin_id=?
     WHERE id=?
     """, ("ACTIVE", update.effective_user.id, did))
 
@@ -158,7 +162,7 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Method: {method}"
     )
 
-# ================= SELLER ACTION =================
+# ================= SELLER ACTION (FIXED) =================
 async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, action):
 
     if not update.message.reply_to_message:
@@ -318,6 +322,17 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await q.edit_message_text(text)
 
+    # ================= PROOF CHANNEL =================
+    if PROOF_CHANNEL:
+        try:
+            await context.bot.send_message(
+                chat_id=PROOF_CHANNEL,
+                text=text
+            )
+            logger.info("Proof sent successfully")
+        except Exception as e:
+            logger.error(f"Proof channel error: {e}")
+
 # ================= STATS =================
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -336,103 +351,16 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Active: {sum(1 for r in rows if r[0]=='ACTIVE')}"
     )
 
-# ================= HISTORY =================
-async def history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if len(context.args) < 1:
-        return await update.message.reply_text("Usage: /history @user")
-
-    user = clean_username(context.args[0])
-
-    cursor.execute("""
-    SELECT id, seller_username, buyer_username, amount, method, status
-    FROM deals
-    WHERE seller_username=? OR buyer_username=?
-    ORDER BY id DESC
-    LIMIT 10
-    """, (user, user))
-
-    rows = cursor.fetchall()
-
-    if not rows:
-        return await update.message.reply_text("No deals found")
-
-    text = f"📦 HISTORY @{user}\n\n"
-
-    for did, seller, buyer, amount, method, status in rows:
-        text += f"{deal_id(did)} | {status}\nS:@{seller} → B:@{buyer}\n{amount} | {method}\n\n"
-
-    await update.message.reply_text(text)
-
-# ================= LEADERBOARD =================
-async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if update.effective_user.id not in ADMIN_IDS:
-        return
-
-    cursor.execute("""
-    SELECT handled_by, status
-    FROM deals
-    WHERE handled_by IS NOT NULL
-    """)
-
-    rows = cursor.fetchall()
-
-    stats = {}
-
-    for admin, status in rows:
-
-        admin = admin.strip().lower()
-
-        if admin not in stats:
-            stats[admin] = {
-                "total": 0,
-                "completed": 0,
-                "refunded": 0,
-                "cancelled": 0
-            }
-
-        stats[admin]["total"] += 1
-
-        if status == "COMPLETED":
-            stats[admin]["completed"] += 1
-        elif status == "REFUNDED":
-            stats[admin]["refunded"] += 1
-        elif status == "CANCELLED":
-            stats[admin]["cancelled"] += 1
-
-    sorted_admins = sorted(stats.items(), key=lambda x: x[1]["total"], reverse=True)
-
-    text = "🏆 ADMIN LEADERBOARD\n\n"
-
-    rank = 1
-    for admin, data in sorted_admins:
-        mention = f"@{admin}"
-
-        text += (
-            f"{rank}. {mention}\n"
-            f"📦 Total: {data['total']}\n"
-            f"✅ Completed: {data['completed']}\n"
-            f"💸 Refunded: {data['refunded']}\n"
-            f"❌ Cancelled: {data['cancelled']}\n\n"
-        )
-        rank += 1
-
-    await update.message.reply_text(text)
-
 # ================= MAIN =================
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
-
 app.add_handler(CommandHandler("activate", activate))
+app.add_handler(CommandHandler("stats", stats))
+
 app.add_handler(CommandHandler("release", release))
 app.add_handler(CommandHandler("refund", refund))
 app.add_handler(CommandHandler("cancel", cancel))
-
-app.add_handler(CommandHandler("stats", stats))
-app.add_handler(CommandHandler("history", history))
-app.add_handler(CommandHandler("leaderboard", leaderboard))
 
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, deal_form))
 
