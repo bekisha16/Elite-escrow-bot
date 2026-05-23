@@ -17,7 +17,7 @@ PROOF_CHANNEL = os.getenv("PROOF_CHANNEL")
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN missing")
 
-ADMIN_IDS = [6138132255, 5635739078, 8216037421]
+ADMIN_IDS = [6138132255, 5635739078]
 
 # ================= DB =================
 conn = sqlite3.connect("escrow.db", check_same_thread=False)
@@ -359,14 +359,19 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id not in ADMIN_IDS:
         return
 
-    cursor.execute("SELECT handled_by, status FROM deals WHERE handled_by IS NOT NULL")
+    cursor.execute("""
+    SELECT handled_by, status
+    FROM deals
+    WHERE handled_by IS NOT NULL
+    """)
+
     rows = cursor.fetchall()
 
     stats = {}
 
     for admin, status in rows:
 
-        admin = admin.strip()
+        admin = admin.strip().lower()
 
         if admin not in stats:
             stats[admin] = {
@@ -380,27 +385,42 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if status == "COMPLETED":
             stats[admin]["completed"] += 1
+
         elif status == "REFUNDED":
             stats[admin]["refunded"] += 1
+
         elif status == "CANCELLED":
             stats[admin]["cancelled"] += 1
 
-    sorted_admins = sorted(stats.items(), key=lambda x: x[1]["total"], reverse=True)
+    sorted_admins = sorted(
+        stats.items(),
+        key=lambda x: x[1]["total"],
+        reverse=True
+    )
 
     text = "🏆 ADMIN LEADERBOARD\n\n"
 
     rank = 1
+
     for admin, data in sorted_admins:
+
+        mention = f"<a href='https://t.me/{admin}'>@{admin}</a>"
+
         text += (
-            f"{rank}. {admin}\n"
+            f"{rank}. {mention}\n"
             f"📦 Total: {data['total']}\n"
             f"✅ Completed: {data['completed']}\n"
             f"💸 Refunded: {data['refunded']}\n"
             f"❌ Cancelled: {data['cancelled']}\n\n"
         )
+
         rank += 1
 
-    await update.message.reply_text(text)
+    await update.message.reply_text(
+        text,
+        parse_mode="HTML",
+        disable_web_page_preview=True
+    )
 
 # ================= MAIN =================
 app = ApplicationBuilder().token(TOKEN).build()
