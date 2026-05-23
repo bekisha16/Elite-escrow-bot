@@ -188,7 +188,7 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
 
     if not row:
         return await update.message.reply_text(
-            "❌ You must reply ONLY to the ACTIVATED deal message"
+            "❌ Invalid. Reply ONLY to activated deal message."
         )
 
     did, seller, buyer, status, locked = row
@@ -215,14 +215,13 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
         InlineKeyboardButton("❌ Reject", callback_data=f"rej_{did}")
     ]]
 
-    # ✅ UPDATED MESSAGE WITH BUYER MENTION
     await update.message.reply_text(
         f"⚠ SELLER REQUEST\n\n"
         f"🆔 Deal: {deal_id(did)}\n"
         f"👤 Seller: @{seller}\n"
         f"👤 Buyer: @{buyer}\n\n"
-        f"📌 Seller requested for {action.upper()}\n\n"
-        f"👉 @{buyer} please accept or reject this request",
+        f"📌 Requested: {action.upper()}\n\n"
+        f"👉 @{buyer} please accept or reject",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -304,10 +303,11 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not row:
         return
 
-    admin_id, seller, buyer, amount, method, created, action_type = row
+    activator_id, seller, buyer, amount, method, created, action_type = row
+    approver = safe_user(q.from_user)
 
-    if q.from_user.id != admin_id:
-        return await q.answer("Only activating admin", show_alert=True)
+    if q.from_user.id != activator_id:
+        return await q.answer("Only activating admin can finalize", show_alert=True)
 
     if status == "ok":
         final = (
@@ -320,7 +320,7 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cursor.execute("""
     UPDATE deals SET status=?, handled_by=? WHERE id=?
-    """, (final, safe_user(q.from_user), did))
+    """, (final, approver, did))
 
     conn.commit()
 
@@ -331,8 +331,9 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"👤 Buyer: @{buyer}\n"
         f"💰 Amount: {amount}\n"
         f"💳 Method: {method}\n"
-        f"⏱ Duration: {duration(created)}\n"
-        f"👮 Handled by: @{safe_user(q.from_user)}\n"
+        f"⏱ Duration: {duration(created)}\n\n"
+        f"🟢 Activated by Admin ID: {activator_id}\n"
+        f"👮 Final Approved by: @{approver}\n\n"
         f"📌 Status: {final}"
     )
 
