@@ -7,7 +7,9 @@ from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
-    ContextTypes
+    ContextTypes,
+    MessageHandler,
+    filters
 )
 
 # ================= CONFIG =================
@@ -45,13 +47,10 @@ conn.commit()
 
 # ================= HELPERS =================
 def clean_username(u):
-    return (u or "").replace("@", "").replace("seller:", "").replace("buyer:", "").strip().lower()
+    return (u or "").replace("@", "").strip().lower()
 
 def clean_field(v):
-    v = (v or "").strip()
-    v = v.replace("amount:", "").replace("Amount:", "")
-    v = v.replace("method:", "").replace("Method:", "")
-    return v.strip()
+    return (v or "").strip()
 
 def safe_user(user):
     return (user.username or str(user.id)).lower()
@@ -70,37 +69,55 @@ def duration(start):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Escrow Bot Running ✅")
 
-# ================= DEAL =================
-async def deal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ================= FORM DEAL CREATION =================
+async def deal_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    if len(context.args) < 4:
-        return await update.message.reply_text("Usage: /deal @seller @buyer amount method")
+    text = update.message.text
 
-    seller = clean_username(context.args[0])
-    buyer = clean_username(context.args[1])
-    amount = clean_field(context.args[2])
-    method = clean_field(" ".join(context.args[3:]))
+    # must contain escrow form
+    if "buyer:" not in text.lower() or "seller:" not in text.lower():
+        return
 
-    cursor.execute("""
-    INSERT INTO deals (seller_username, buyer_username, amount, method, status, created_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-    """, (seller, buyer, amount, method, "PENDING", time.time()))
+    try:
+        lines = text.split("\n")
+        data = {}
 
-    conn.commit()
+        for line in lines:
+            if ":" in line:
+                key, value = line.split(":", 1)
+                data[key.strip().lower()] = value.strip()
 
-    did = cursor.lastrowid
+        seller = clean_username(data.get("seller"))
+        buyer = clean_username(data.get("buyer"))
+        amount = clean_field(data.get("amount"))
+        method = clean_field(data.get("method"))
 
-    msg = await update.message.reply_text(
-        f"🚨 NEW DEAL {deal_id(did)}\n"
-        f"Seller: @{seller}\n"
-        f"Buyer: @{buyer}\n"
-        f"Amount: {amount}\n"
-        f"Method: {method}\n\n"
-        f"Waiting activation..."
-    )
+        if not seller or not buyer or not amount or not method:
+            return await update.message.reply_text("❌ Invalid escrow form format")
 
-    cursor.execute("UPDATE deals SET deal_message_id=? WHERE id=?", (msg.message_id, did))
-    conn.commit()
+        cursor.execute("""
+        INSERT INTO deals (seller_username, buyer_username, amount, method, status, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, (seller, buyer, amount, method, "PENDING", time.time()))
+
+        conn.commit()
+
+        did = cursor.lastrowid
+
+        msg = await update.message.reply_text(
+            f"🚨 NEW DEAL {deal_id(did)}\n\n"
+            f"Seller: @{seller}\n"
+            f"Buyer: @{buyer}\n"
+            f"Amount: {amount}\n"
+            f"Method: {method}\n\n"
+            f"⏳ Waiting admin activation..."
+        )
+
+        cursor.execute("UPDATE deals SET deal_message_id=? WHERE id=?", (msg.message_id, did))
+        conn.commit()
+
+    except Exception:
+        await update.message.reply_text("❌ Error processing escrow form")
 
 # ================= ACTIVATE =================
 async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -301,12 +318,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await q.edit_message_text(text)
 
-    if PROOF_CHANNEL:
-        try:
-            await context.bot.send_message(chat_id=PROOF_CHANNEL, text=text)
-        except:
-            pass
-
 # ================= STATS =================
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -385,26 +396,18 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if status == "COMPLETED":
             stats[admin]["completed"] += 1
-
         elif status == "REFUNDED":
             stats[admin]["refunded"] += 1
-
         elif status == "CANCELLED":
             stats[admin]["cancelled"] += 1
 
-    sorted_admins = sorted(
-        stats.items(),
-        key=lambda x: x[1]["total"],
-        reverse=True
-    )
+    sorted_admins = sorted(stats.items(), key=lambda x: x[1]["total"], reverse=True)
 
     text = "🏆 ADMIN LEADERBOARD\n\n"
 
     rank = 1
-
     for admin, data in sorted_admins:
-
-        mention = f"<a href='https://t.me/{admin}'>@{admin}</a>"
+        mention = f"@{admin}"
 
         text += (
             f"{rank}. {mention}\n"
@@ -413,22 +416,16 @@ async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💸 Refunded: {data['refunded']}\n"
             f"❌ Cancelled: {data['cancelled']}\n\n"
         )
-
         rank += 1
 
-    await update.message.reply_text(
-        text,
-        parse_mode="HTML",
-        disable_web_page_preview=True
-    )
+    await update.message.reply_text(text)
 
 # ================= MAIN =================
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("deal", deal))
-app.add_handler(CommandHandler("activate", activate))
 
+app.add_handler(CommandHandler("activate", activate))
 app.add_handler(CommandHandler("release", release))
 app.add_handler(CommandHandler("refund", refund))
 app.add_handler(CommandHandler("cancel", cancel))
@@ -436,6 +433,8 @@ app.add_handler(CommandHandler("cancel", cancel))
 app.add_handler(CommandHandler("stats", stats))
 app.add_handler(CommandHandler("history", history))
 app.add_handler(CommandHandler("leaderboard", leaderboard))
+
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, deal_form))
 
 app.add_handler(CallbackQueryHandler(buyer_buttons, pattern="^(acc|rej)_"))
 app.add_handler(CallbackQueryHandler(admin_buttons, pattern="^adm_"))
