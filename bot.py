@@ -168,7 +168,7 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     conn.commit()
 
-# ================= SELLER ACTION (STRICT FIX) =================
+# ================= SELLER ACTION =================
 async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, action):
 
     if not update.message.reply_to_message:
@@ -188,7 +188,7 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
 
     if not row:
         return await update.message.reply_text(
-            "❌ Invalid target. Reply ONLY to ACTIVATED deal message."
+            "❌ You must reply ONLY to the ACTIVATED deal message"
         )
 
     did, seller, buyer, status, locked = row
@@ -215,11 +215,14 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
         InlineKeyboardButton("❌ Reject", callback_data=f"rej_{did}")
     ]]
 
+    # ✅ UPDATED MESSAGE WITH BUYER MENTION
     await update.message.reply_text(
         f"⚠ SELLER REQUEST\n\n"
         f"🆔 Deal: {deal_id(did)}\n"
-        f"📌 Requested: {action.upper()}\n\n"
-        f"👉 Buyer pls accept or reject",
+        f"👤 Seller: @{seller}\n"
+        f"👤 Buyer: @{buyer}\n\n"
+        f"📌 Seller requested for {action.upper()}\n\n"
+        f"👉 @{buyer} please accept or reject this request",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
