@@ -24,7 +24,7 @@ PROOF_CHANNEL = os.getenv("PROOF_CHANNEL")
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN missing")
 
-ADMIN_IDS = [6138132255, 5635739078, 8216037421]
+ADMIN_IDS = [6138132255, 5635739078]
 
 # ================= DB =================
 conn = sqlite3.connect("escrow.db", check_same_thread=False)
@@ -74,7 +74,7 @@ def duration(start):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Escrow Bot Running ✅")
 
-# ================= FORM CREATION =================
+# ================= FORM =================
 async def deal_form(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
@@ -162,7 +162,7 @@ async def activate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Method: {method}"
     )
 
-# ================= SELLER ACTION (FIXED) =================
+# ================= SELLER ACTION (FIXED MESSAGE) =================
 async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, action):
 
     if not update.message.reply_to_message:
@@ -204,8 +204,16 @@ async def seller_action(update: Update, context: ContextTypes.DEFAULT_TYPE, acti
         InlineKeyboardButton("❌ Reject", callback_data=f"rej_{did}")
     ]]
 
+    # ✅ FIXED MESSAGE (YOUR REQUEST)
     await update.message.reply_text(
-        f"⚠ Seller requested: {action.upper()}",
+        f"⚠ SELLER REQUEST\n\n"
+        f"🆔 Deal: {deal_id(did)}\n"
+        f"👤 Seller: @{seller}\n"
+        f"👤 Buyer: @{buyer}\n\n"
+        f"📌 Seller requested: {action.upper()}\n\n"
+        f"👉 Buyer please choose:\n"
+        f"✔ Accept to continue\n"
+        f"❌ Reject to cancel",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -321,17 +329,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await q.edit_message_text(text)
-
-    # ================= PROOF CHANNEL =================
-    if PROOF_CHANNEL:
-        try:
-            await context.bot.send_message(
-                chat_id=PROOF_CHANNEL,
-                text=text
-            )
-            logger.info("Proof sent successfully")
-        except Exception as e:
-            logger.error(f"Proof channel error: {e}")
 
 # ================= STATS =================
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
