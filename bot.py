@@ -17,7 +17,7 @@ PROOF_CHANNEL = os.getenv("PROOF_CHANNEL")
 if not TOKEN:
     raise RuntimeError("BOT_TOKEN missing")
 
-ADMIN_IDS = [6138132255, 5635739078]
+ADMIN_IDS = [6138132255, 5635739078, 8216037421]
 
 # ================= DB =================
 conn = sqlite3.connect("escrow.db", check_same_thread=False)
