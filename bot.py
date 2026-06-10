@@ -571,4 +571,4 @@ app.add_handler(
     )
 )
 
-app.run_polling()
+app.run_polling(close_loop=False)
