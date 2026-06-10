@@ -571,4 +571,5 @@ app.add_handler(
     )
 )
 
-app.run_polling(close_loop=False)
+if __name__ == "__main__":
+    app.run_polling()
